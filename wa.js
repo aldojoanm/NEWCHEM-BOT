@@ -499,11 +499,14 @@ function looksLikeFullName(t=''){
 
 function productFromReferral(ref){
   try{
-    const bits = [ref?.headline, ref?.body, ref?.source_url, ref?.adgroup_name, ref?.campaign_name]
+    const bits = [
+     ref?.headline, ref?.body, ref?.source_url, ref?.adgroup_name, ref?.campaign_name,
+     ref?.deeplink_url, ref?.image_url, ref?.video_url
+    ]
       .filter(Boolean).join(' ');
     let byQS=null;
     try{
-      const u = new URL(ref?.source_url||'');
+      const u = new URL(ref?.deeplink_url || ref?.source_url || '');
       const q = (k)=>u.searchParams.get(k);
       const sku = q('sku') || q('SKU');
       const pn  = q('product') || q('producto') || q('p') || q('ref');
@@ -514,8 +517,16 @@ function productFromReferral(ref){
         byQS = findProduct(pn) || (fuzzyCandidate(pn)||{}).prod || null;
       }
     }catch{}
+    // extra: intenta con nombre de archivo de imagen/video del anuncio
+    let byMedia = null;
+    const mediaUrl = ref?.image_url || ref?.video_url || '';
+    if (mediaUrl) {
+      const base = mediaUrl.split('/').pop() || '';
+      const stem = base.replace(/\.[a-z0-9]+$/i,'').replace(/[_\-]/g,' ');
+      byMedia = findProduct(stem) || ((fuzzyCandidate(stem)||{}).prod) || null;
+    }
     const byText = findProduct(bits) || ((fuzzyCandidate(bits)||{}).prod) || null;
-    return byQS || byText || null;
+    return byQS || byMedia || byText || null;
   }catch{ return null; }
 }
 
@@ -1028,11 +1039,11 @@ async function nextStep(to){
       const p=(CATALOG||[]).find(pp=>norm(pp.nombre||'')===norm(s.vars.last_product));
       const c=normalizeCatLabel(p?.categoria||''); if(c) s.vars.category=c;
     }
-    if(!s.vars.last_product && !s.vars.category){
-      if(stale('categoria') || s.lastPrompt!=='categoria') return askCategory(to);
-      return;
-    }
 
+    if(!s.vars.last_product && !s.vars.category){
+    if(stale('categoria') || s.lastPrompt!=='categoria') return askCategory(to);
+    return;
+    }
     // (7) Listado por categoría si aún no hay producto elegido
     if(!s.vars.last_product) return listByCategory(to);
 
@@ -1193,7 +1204,7 @@ try {
 
       // Saludo breve con nombre (sin confirmar nada)
       if (s.profileName) {
-        await toText(fromId, `Hola ${s.profileName}. ¡Qué gusto saludarte nuevamente! Soy el asistente virtual de New Chem Agroquímicos.`);
+        await toText(fromId, `Hola *${s.profileName}*. ¡Qué gusto saludarte nuevamente! Soy el asistente virtual de *New Chem Agroquímicos*.`);
       }
 
       // Salta directo al siguiente paso de producto/cotización
@@ -1282,6 +1293,7 @@ if (isAdvisor(fromId)) {
       s.meta.referralHandled = true;
       s.meta.origin = 'facebook';
       s.meta.referral = referral;
+      resetProductState(s, { clearCategory: true });
       persistS(fromId);
       const prod = productFromReferral(referral);
       if (prod){
@@ -1299,6 +1311,7 @@ if (isAdvisor(fromId)) {
     if(!s.greeted){
       s.greeted = true; 
       persistS(fromId);
+      resetProductState(s, { clearCategory: true });
 
       if(!isLeadMsg){
         await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte!, Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');

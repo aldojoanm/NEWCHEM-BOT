@@ -241,6 +241,28 @@ function shouldPrompt(s, key, ttlMs=8000){
   return true;
 }
 
+// ===== Perfil de FB: traer nombre por PSID =====
+async function fetchFBProfileName(psid){
+  try{
+    const url = `https://graph.facebook.com/v20.0/${psid}?fields=name,first_name,last_name&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
+    const r = await httpFetchAny(url, { method:'GET' });
+    if(!r.ok) return null;
+    const j = await r.json();
+    const raw = (j.name || [j.first_name, j.last_name].filter(Boolean).join(' ')).trim();
+    if(!raw) return null;
+    // Normaliza/capitaliza y limita tamaño
+    return title(raw).slice(0,80);
+  }catch{ return null; }
+}
+
+async function ensureProfileName(psid){
+  const s = getSession(psid);
+  if (s.profileName) return s.profileName;
+  const n = await fetchFBProfileName(psid);
+  if (n) s.profileName = n;
+  return s.profileName || null;
+}
+
 // ===== PREGUNTAS ATÓMICAS =====
 async function askName(psid){
   const s=getSession(psid);
@@ -254,10 +276,11 @@ async function askDepartamento(psid){
   if (!shouldPrompt(s,'askDepartamento')) return;
   const nombre = s.profileName ? `Gracias, ${s.profileName}. 😊\n` : '';
   await sendQR(psid,
-    `${nombre}📍 Cuéntanos, ¿desde qué departamento de Bolivia nos escribes?`,
+    `${nombre}📍 *Para armar tu cotización*, selecciona tu **departamento**:`,
     DEPARTAMENTOS.map(d => ({title:d, payload:`DPTO_${d.toUpperCase().replace(/\s+/g,'_')}`}))
   );
 }
+
 async function askSubzonaSCZ(psid){
   const s=getSession(psid);
   if (s.pending!=='subzona') s.pending='subzona';
@@ -362,7 +385,7 @@ async function showHelp(psid){
 // ===== Orquestador =====
 async function nextStep(psid){
   const s=getSession(psid);
-  if(!s.profileName) return askName(psid);
+  if(!s.profileName) await ensureProfileName(psid);
   if(!s.vars.departamento) return askDepartamento(psid);
   if(s.vars.departamento==='Santa Cruz' && !s.vars.subzona) return askSubzonaSCZ(psid);
   if(s.vars.departamento!=='Santa Cruz' && !s.vars.subzona) return askSubzonaLibre(psid);
@@ -391,7 +414,8 @@ async function handleOpeningIntent(psid, text){
       `¡Excelente! Sobre *${prod.nombre}* puedo ayudarte con **precios, disponibilidad y dosis**. ` +
       `Para enviarte una **cotización sin compromiso**, primero te ubico con unos datos rápidos.`
     );
-    await askName(psid);
+    await ensureProfileName(psid);
+    await askDepartamento(psid);
     return true;
   }
 
@@ -401,7 +425,8 @@ async function handleOpeningIntent(psid, text){
       '¡Con gusto te preparo una **cotización personalizada**! ' +
       'Me podrías ayudar con algunos datos para asignarte el asesor correcto.'
     );
-    await askName(psid);
+    await ensureProfileName(psid);
+    await askDepartamento(psid);
     return true;
   }
 
@@ -413,7 +438,8 @@ async function handleOpeningIntent(psid, text){
     );
     await sendText(psid, 'Si algo del catálogo te llamó la atención, cuéntame el *nombre del producto* y lo avanzamos de inmediato. 🙂');
     getSession(psid).pending = 'prod_from_catalog';
-    await askName(psid);
+    await ensureProfileName(psid);
+    await askDepartamento(psid);
     return true;
   }
 
@@ -423,7 +449,8 @@ async function handleOpeningIntent(psid, text){
     ]);
     await sendText(psid, '¿Qué *producto* te interesó del catálogo? Si me dices el nombre, te ayudo con precio y disponibilidad. 🙂');
     getSession(psid).pending = 'prod_from_catalog';
-    await askName(psid);
+    await ensureProfileName(psid);
+    await askDepartamento(psid);
     return true;
   }
 
@@ -452,19 +479,11 @@ router.post('/webhook', async (req,res)=>{
           s.flags.greeted = true;
           s.flags.justOpenedAt = Date.now();
           await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
-          await askName(psid);
+          await ensureProfileName(psid);
+          await askDepartamento(psid);
           continue;
         }
         
-        // GET_STARTED
-        if(ev.postback?.payload === 'GET_STARTED'){
-          s.flags.greeted = true;
-          s.flags.justOpenedAt = Date.now();
-          await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
-          await askName(psid);
-          continue;
-        }
-
         // INPUT
         let text = (ev.message?.text||'').trim();
         const qr = ev.message?.quick_reply?.payload || null;
@@ -524,7 +543,7 @@ router.post('/webhook', async (req,res)=>{
           s.flags.justOpenedAt = Date.now();
           await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
           const handled = await handleOpeningIntent(psid, text); // ignorará si solo es “hola”
-          if(!handled) await askName(psid);
+          if(!handled){ await ensureProfileName(psid); await askDepartamento(psid); }
           continue;
         }
 
@@ -545,8 +564,8 @@ router.post('/webhook', async (req,res)=>{
           if (prod){
             s.vars.productIntent = prod.nombre;
             s.pending=null;
-            if(!s.profileName) await askName(psid);
-            else await nextStep(psid);
+            await ensureProfileName(psid);
+            await nextStep(psid);
             continue;
           }else{
             await sendText(psid,'No identifiqué el producto. ¿Podrías escribir el *nombre exacto* tal como aparece en el catálogo?');
@@ -576,19 +595,10 @@ router.post('/webhook', async (req,res)=>{
         }
 
         // === CAPTURA DE NOMBRE (sin aceptar saludos como nombre) ===
-        if(s.pending==='nombre' || (!s.profileName && !wantsCatalog(text) && !wantsLocation(text))){
-          if(s.pending!=='nombre') s.pending='nombre';
-          const cleanedRaw = text.replace(/\s+/g,' ').trim();
-          if (isGreeting(cleanedRaw)) { await askName(psid); continue; }
-          const cleaned = title(cleanedRaw);
-          if (cleaned.length >= 2){
-            s.profileName = cleaned; s.pending=null;
-            await askDepartamento(psid);
-          }else{
-            await askName(psid);
+          if(!s.profileName){
+            await ensureProfileName(psid);
+            if(s.profileName){ await askDepartamento(psid); continue; }
           }
-          continue;
-        }
 
         // === DEPARTAMENTO (acepta texto aunque espere QR) ===
         if(!s.vars.departamento || s.pending==='departamento'){
