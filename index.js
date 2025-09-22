@@ -55,7 +55,8 @@ function newSession(){
     memory: [],
     lastPrompt: null, // { key, at }
     lastSeen: Date.now(),
-    expiresAt: Date.now() + SESSION_TTL_MS
+    expiresAt: Date.now() + SESSION_TTL_MS,
+    meta: { source:null, first_message_text:null, referral_raw:null } 
   };
 }
 // Detecta cualquier variante del "Get Started" de Messenger
@@ -152,7 +153,7 @@ function parsePhone(text){
 const wantsCatalog  = t => /cat[aá]logo|portafolio|lista de precios/i.test(t) || /portafolio[- _]?newchem/i.test(norm(t));
 const wantsLocation = t => /(ubicaci[oó]n|direcci[oó]n|mapa|d[oó]nde est[aá]n|donde estan)/i.test(t);
 const wantsClose    = t => /(no gracias|gracias|eso es todo|listo|nada m[aá]s|ok gracias|est[aá] bien|finalizar)/i.test(norm(t));
-const asksPrice     = t => /(precio|cu[aá]nto vale|cu[aá]nto cuesta|cotizar|costo|proforma|cotizaci[oó]n)/i.test(t);
+const asksPrice     = t => /(precio|presio|cu[aá]nto vale|cu[aá]nto cuesta|cotizar|costo|proforma|cotizaci[oó]n)/i.test(t);
 const wantsAgent    = t => /asesor|humano|ejecutivo|vendedor|representante|agente|contact(a|o|arme)|whats?app|wasap|wsp|wpp|n[uú]mero|telefono|tel[eé]fono|celular/i.test(norm(t));
 // Saludos
 const isGreeting = (t='') => {
@@ -179,6 +180,28 @@ const wantsMoreHelp = t => /(otra\s+(duda|consulta|pregunta)|tengo\s+otra\s+duda
 const asksProducts  = t => /(qu[eé] productos tienen|que venden|productos disponibles|l[ií]nea de productos)/i.test(t);
 const asksShipping  = t => /(env[ií]os?|env[ií]an|hacen env[ií]os|delivery|entrega|env[ií]an hasta|mandan|env[ií]o a)/i.test(norm(t));
 
+const AUTOFAQ_PATTERNS = [
+  /podr[ií]an darme m[aá]s informaci[oó]n del negocio/i,
+  /m[aá]s informaci[oó]n/i,
+  /quiero saber m[aá]s/i,
+  /me interesa/i,
+  /informaci[oó]n por favor/i,
+  /enviar mensaje/i,
+  /cu[eé]ntenos/i,
+  /chat(ea|ea)? con nosotros/i
+];
+
+function isAutoFAQ(text=''){
+  const t = String(text || '').trim();
+  if (!t) return false;
+  return AUTOFAQ_PATTERNS.some(re => re.test(t));
+}
+
+// ===== Meta de origen para auditoría =====
+function markSource(s, src){
+  s.meta = s.meta || {};
+  if (!s.meta.source) s.meta.source = src; // fija solo la primera vez
+}
 // Reconocer producto (catálogo)
 function findProduct(text){
   const q = norm(text).replace(/[^a-z0-9\s]/g,' ').replace(/\s+/g,' ').trim();
@@ -274,9 +297,9 @@ async function askDepartamento(psid){
   const s=getSession(psid);
   if (s.pending!=='departamento') s.pending='departamento';
   if (!shouldPrompt(s,'askDepartamento')) return;
-  const nombre = s.profileName ? `Gracias, ${s.profileName}. 😊\n` : '';
+  const nombre = s.profileName ? `${s.profileName}. 😊\n` : '';
   await sendQR(psid,
-    `${nombre}📍 *Para armar tu cotización*, selecciona tu **departamento**:`,
+    `${nombre}📍 Me podrías indicar desde que *departamento* nos escribes?, selecciona tu **departamento**:`,
     DEPARTAMENTOS.map(d => ({title:d, payload:`DPTO_${d.toUpperCase().replace(/\s+/g,'_')}`}))
   );
 }
@@ -400,14 +423,28 @@ router.get('/webhook',(req,res)=>{
 });
 
 // ===== Aperturas inteligentes (antes de pedir nombre) =====
+// ===== Aperturas inteligentes (antes de pedir nombre) =====
 async function handleOpeningIntent(psid, text){
   const s = getSession(psid);
 
-  // Ignorar saludos vacíos aquí (para no disparar flujos dobles)
+  // 0) Plantilla/AutoFAQ: tratar como inicio válido (aunque sea genérico)
+  if (isAutoFAQ(text)) {
+    markSource(s, s.meta?.source || 'AUTOFAQ');
+    s.meta.first_message_text = s.meta.first_message_text || text;
+    await ensureProfileName(psid);
+    await askDepartamento(psid);
+    return true;
+  }
+
+  // 1) Ignorar saludos vacíos aquí (para no disparar flujos dobles)
   if (isGreeting(text)) return false;
 
+  // 2) Producto explícito
   const prod = findProduct(text);
   if (prod){
+    markSource(s, s.meta?.source || 'TEXT_PRODUCT');
+    s.meta.first_message_text = s.meta.first_message_text || text;
+
     s.vars.productIntent = prod.nombre;
     s.vars.intent = asksPrice(text) ? 'quote' : 'product';
     await sendText(psid,
@@ -419,7 +456,11 @@ async function handleOpeningIntent(psid, text){
     return true;
   }
 
+  // 3) Intención de cotización genérica
   if (asksPrice(text)){
+    markSource(s, s.meta?.source || 'TEXT_QUOTE');
+    s.meta.first_message_text = s.meta.first_message_text || text;
+
     s.vars.intent = 'quote';
     await sendText(psid,
       '¡Con gusto te preparo una **cotización personalizada**! ' +
@@ -430,7 +471,11 @@ async function handleOpeningIntent(psid, text){
     return true;
   }
 
+  // 4) Piden catálogo o productos
   if (asksProducts(text)){
+    markSource(s, s.meta?.source || 'TEXT_PRODUCTS');
+    s.meta.first_message_text = s.meta.first_message_text || text;
+
     await sendButtons(psid,
       'Contamos con **herbicidas, insecticidas y fungicidas** de alta eficacia. ' +
       'Puedes abrir el catálogo o, si me dices el producto, te preparo una cotización.',
@@ -444,6 +489,9 @@ async function handleOpeningIntent(psid, text){
   }
 
   if (wantsCatalog(text)){
+    markSource(s, s.meta?.source || 'TEXT_CATALOG');
+    s.meta.first_message_text = s.meta.first_message_text || text;
+
     await sendButtons(psid, 'Aquí tienes nuestro catálogo digital 👇', [
       { type:'web_url', url: CATALOG_URL, title:'Ver catálogo' }
     ]);
@@ -473,6 +521,16 @@ router.post('/webhook', async (req,res)=>{
         if(ev.message?.is_echo) continue;
 
         const s = getSession(psid);
+        // Marcar origen por referral/postback si viene
+        if (ev.referral){
+          s.meta = s.meta || {};
+          s.meta.referral_raw = s.meta.referral_raw || ev.referral;
+          markSource(s, s.meta.source || 'ADS_REFERRAL');
+        }
+        if (ev.postback && ev.postback.payload === 'GET_STARTED'){
+          markSource(s, s.meta?.source || 'GET_STARTED');
+        }
+
 
         // === GET_STARTED (postback, referral, opt-in) ===
         if (isGetStartedEvent(ev)) {
@@ -534,16 +592,35 @@ router.post('/webhook', async (req,res)=>{
           text = qr.replace(/^QR_/,'').replace(/_/g,' ').trim() || text;
         }
 
-        if(!text) continue;
-        remember(psid,'user',text);
+        if (!s.meta?.first_message_text) {
+          s.meta = s.meta || {};
+          s.meta.first_message_text = text;
 
-        // 1) Saludo si el usuario escribió sin tocar “Empezar”
-        if(!s.flags.greeted && isGreeting(text)){
+          // Sólo etiquetar como TEXT_FIRST si NO cae en alguna intención conocida
+          const looksAutoFAQ = isAutoFAQ(text);
+          const looksGreeting = isGreeting(text);
+          const looksProduct  = !!findProduct(text);
+          const looksQuote    = asksPrice(text);
+          const looksCatalog  = wantsCatalog(text) || asksProducts(text);
+
+          if (!s.meta?.source && !looksAutoFAQ && !looksGreeting && !looksProduct && !looksQuote && !looksCatalog) {
+            markSource(s, 'TEXT_FIRST');
+          }
+        }
+
+        // 1) Usuario escribe sin tocar “Empezar”
+        if (!s.flags.greeted && (isGreeting(text) || isAutoFAQ(text))) {
           s.flags.greeted = true;
           s.flags.justOpenedAt = Date.now();
+          markSource(s, s.meta?.source || (isAutoFAQ(text) ? 'AUTOFAQ' : 'GREETING_TEXT'));
+
           await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
-          const handled = await handleOpeningIntent(psid, text); // ignorará si solo es “hola”
-          if(!handled){ await ensureProfileName(psid); await askDepartamento(psid); }
+
+          const handled = await handleOpeningIntent(psid, text); // si es AutoFAQ/producto, sigue
+          if(!handled){ 
+            await ensureProfileName(psid); 
+            await askDepartamento(psid); 
+          }
           continue;
         }
 
