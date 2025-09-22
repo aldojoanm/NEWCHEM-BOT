@@ -299,7 +299,7 @@ async function askDepartamento(psid){
   if (!shouldPrompt(s,'askDepartamento')) return;
   const nombre = s.profileName ? `${s.profileName}. 😊\n` : '';
   await sendQR(psid,
-    `${nombre}📍 Me podrías indicar desde que *departamento* nos escribes?, selecciona tu **departamento**:`,
+    `${nombre}📍 Me podrías indicar desde que *departamento* nos escribes?, \n Selecciona tu *departamento*:`,
     DEPARTAMENTOS.map(d => ({title:d, payload:`DPTO_${d.toUpperCase().replace(/\s+/g,'_')}`}))
   );
 }
