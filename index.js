@@ -179,7 +179,7 @@ const wantsMoreHelp = t => /(otra\s+(duda|consulta|pregunta)|tengo\s+otra\s+duda
 
 const asksProducts  = t => /(qu[eé] productos tienen|que venden|productos disponibles|l[ií]nea de productos)/i.test(t);
 const asksShipping  = t => /(env[ií]os?|env[ií]an|hacen env[ií]os|delivery|entrega|env[ií]an hasta|mandan|env[ií]o a)/i.test(norm(t));
-
+const wantsAdInfo = t => /(anuncio|publicidad|aviso|post|camp[aá]na).*(m[aá]s|mas|info|informaci[oó]n|contar|detalle|detalles)|pueden\s+contarme\s+algo\s+m[aá]s\s+sobre\s+el\s+anuncio/i.test(norm(t));
 const AUTOFAQ_PATTERNS = [
   /podr[ií]an darme m[aá]s informaci[oó]n del negocio/i,
   /m[aá]s informaci[oó]n/i,
@@ -188,9 +188,11 @@ const AUTOFAQ_PATTERNS = [
   /informaci[oó]n por favor/i,
   /enviar mensaje/i,
   /cu[eé]ntenos/i,
-  /chat(ea|ea)? con nosotros/i
+  /chat(ea|ea)? con nosotros/i,
+  /hay alguien con quien (pueda|puedo) chatear/i,
+  /pueden contarme algo m[aá]s sobre el anuncio/i,
+  /m[aá]s (info|informaci[oó]n) sobre el anuncio/i
 ];
-
 function isAutoFAQ(text=''){
   const t = String(text || '').trim();
   if (!t) return false;
@@ -264,6 +266,26 @@ function shouldPrompt(s, key, ttlMs=8000){
   return true;
 }
 
+async function replyHumanChat(psid){
+  await sendQR(psid,
+    'Puedo ayudarte con:\n• Cotizaciones \n• Catálogo de productos\n• Ubicación y horarios\n\n',
+    [
+      { title:'Cotización', payload:'QR_COTIZACION' },
+      { title:'Ver catálogo', payload:'OPEN_CATALOG' },
+      { title:'Ubicación', payload:'OPEN_LOCATION' },
+      { title:'Horario', payload:'OPEN_HORARIOS' }
+    ]
+  );
+}
+
+async function replyAdInfo(psid){
+  await sendText(psid,
+    '¡Claro! Somos New Chem. Ofrecemos **agroquímicos** (herbicidas, insecticidas y fungicidas) de alta eficacia. ' +
+    'La compra mínima es **US$ 3.000** y la entrega se realiza en nuestro **almacén de Santa Cruz**. ' +
+    'Puedo ayudarte con **precios, disponibilidad y dosis** según tu zona.'
+  );
+}
+
 // ===== Perfil de FB: traer nombre por PSID =====
 async function fetchFBProfileName(psid){
   try{
@@ -299,7 +321,7 @@ async function askDepartamento(psid){
   if (!shouldPrompt(s,'askDepartamento')) return;
   const nombre = s.profileName ? `${s.profileName}. 😊\n` : '';
   await sendQR(psid,
-    `${nombre}📍 Me podrías indicar desde que *departamento* nos escribes?, \n Selecciona tu *departamento*:`,
+    `${nombre}📍 Cuéntanos, ¿desde qué *departamento* de Bolivia nos escribes?, \n Selecciona tu *departamento*:`,
     DEPARTAMENTOS.map(d => ({title:d, payload:`DPTO_${d.toUpperCase().replace(/\s+/g,'_')}`}))
   );
 }
@@ -427,7 +449,16 @@ router.get('/webhook',(req,res)=>{
 async function handleOpeningIntent(psid, text){
   const s = getSession(psid);
 
-  // 0) Plantilla/AutoFAQ: tratar como inicio válido (aunque sea genérico)
+    if (wantsAdInfo(text)) {
+      markSource(s, s.meta?.source || 'AD_INFO');
+      s.meta.first_message_text = s.meta.first_message_text || text;
+
+      await replyAdInfo(psid);
+      await ensureProfileName(psid);
+      await askDepartamento(psid);
+      return true;
+    }
+
   if (isAutoFAQ(text)) {
     markSource(s, s.meta?.source || 'AUTOFAQ');
     s.meta.first_message_text = s.meta.first_message_text || text;
@@ -541,11 +572,12 @@ router.post('/webhook', async (req,res)=>{
           await askDepartamento(psid);
           continue;
         }
+
         
         // INPUT
         let text = (ev.message?.text||'').trim();
         const qr = ev.message?.quick_reply?.payload || null;
-
+        
         if(qr){
           if(qr==='QR_FINALIZAR'){
             await sendText(psid, '¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋');
@@ -621,6 +653,12 @@ router.post('/webhook', async (req,res)=>{
             await ensureProfileName(psid); 
             await askDepartamento(psid); 
           }
+          continue;
+        }
+
+        if (wantsAdInfo(text) && s.flags.greeted) {
+          await replyAdInfo(psid);
+          await nextStep(psid);
           continue;
         }
 
