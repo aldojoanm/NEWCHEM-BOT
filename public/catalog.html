@@ -7,23 +7,15 @@
 <link rel="icon" href="/public/logo.png" />
 <style>
   :root{
-    --brand1:#8365a2;  /* morado */
-    --brand2:#5b67ae;  /* azul */
-    --brand3:#46aec0;  /* cian */
-    --bg:#ffffff;
-    --text:#1a1f23;
-    --muted:#5f6b76;
-    --ring:#e5ecf1;
-    --panel:#ffffff;
-    --shadow:0 10px 30px rgba(27,47,69,.08);
+    --brand1:#8365a2; --brand2:#5b67ae; --brand3:#46aec0;
+    --bg:#ffffff; --text:#1a1f23; --muted:#5f6b76;
+    --ring:#e5ecf1; --panel:#ffffff; --shadow:0 10px 30px rgba(27,47,69,.08);
   }
 
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{
-    margin:0;background:var(--bg);color:var(--text);
-    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
-  }
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial}
   a{color:inherit;text-decoration:none}
 
   /* contenedor más ancho en desktop */
@@ -33,12 +25,11 @@
 
   .card{background:var(--panel);border:1px solid var(--ring);border-radius:18px;box-shadow:var(--shadow)}
 
-  /* Header (sin logo) */
+  /* Header SIN LOGO (alineado) */
   .site-header{padding:18px 18px 8px}
-  .brand{display:flex;flex-direction:column;gap:2px;padding:8px 0 10px;border-bottom:1px solid var(--ring)}
+  .brand{display:flex;flex-direction:column;gap:6px;padding:8px 0 10px;border-bottom:1px solid var(--ring)}
   .title{font-size:22px;font-weight:800;letter-spacing:.2px}
-  .desc{color:var(--muted);margin:6px 0 0}
-
+  .desc{color:var(--muted);margin:0}
   .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px;padding:10px 0 2px}
   .pill{display:inline-block;border:1px solid var(--ring);border-radius:999px;padding:6px 10px}
   .pill.brand{border-color:transparent;background:linear-gradient(90deg,var(--brand1),var(--brand2));color:#fff;font-weight:700}
@@ -48,14 +39,15 @@
   .section-title{display:flex;align-items:center;gap:10px;margin:8px 0 14px;font-weight:900;font-size:18px;letter-spacing:.3px}
   .section-title .dot{width:12px;height:12px;border-radius:50%;background:linear-gradient(90deg,var(--brand2),var(--brand3))}
 
-  /* Tarjetas → mismo layout que móvil, 2 por fila en desktop */
+  /* Tarjetas -> layout tipo móvil SIEMPRE; 2 por fila en desktop */
   .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
   @media (max-width:900px){ .list{grid-template-columns:1fr} }
 
   .prod{
     display:grid;grid-template-columns:1fr;grid-template-areas:
       "name" "img" "price" "pres" "qty" "btn";
-    gap:12px;padding:16px;border:1px solid var(--ring);border-radius:16px;background:#fff;min-width:0
+    gap:12px;padding:16px;border:1px solid var(--ring);
+    border-radius:16px;background:#fff;min-width:0
   }
   .prod .name{grid-area:name}
   .prod .img{grid-area:img}
@@ -81,13 +73,10 @@
   .btn{width:100%;background:linear-gradient(90deg,var(--brand2),var(--brand3));border:none;color:#fff;padding:12px;border-radius:12px;font-weight:900;cursor:pointer}
   .btn:disabled{opacity:.45;cursor:not-allowed}
 
-  /* Carrito (panel derecho) */
+  /* Carrito (panel derecho). Estable/lineal en móvil al duplicar el mismo HTML. */
   .cart{padding:16px}
   .cart h3{margin:0 0 10px;font-size:18px}
-  .item{
-    display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;
-    padding:10px 0;border-bottom:1px solid var(--ring)
-  }
+  .item{display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--ring)}
   .item > div:first-child{min-width:0}
   .item > div:first-child strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item input{width:100%;padding:8px 10px;border:1px solid var(--ring);border-radius:10px}
@@ -95,8 +84,8 @@
   .rm{background:#fff;border:1px solid var(--ring);border-radius:8px;color:#6c7a87;cursor:pointer}
   .totals{margin-top:10px;border-top:2px solid var(--ring);padding-top:10px;font-weight:900}
   .cta{width:100%;margin-top:12px;padding:12px;border-radius:12px;border:none;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2));font-weight:900;cursor:pointer}
-  .muted{color:#5f6b76;font-size:13px}
-  .empty{color:#5f6b76;padding:8px}
+  .muted{color:var(--muted);font-size:13px}
+  .empty{color:var(--muted);padding:8px}
 
   /* FAB + Modal (móvil) */
   .fab{position:fixed;right:18px;bottom:18px;background:linear-gradient(90deg,var(--brand2),var(--brand3));

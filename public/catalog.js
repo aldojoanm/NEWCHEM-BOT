@@ -25,7 +25,7 @@
   fab.addEventListener('click', ()=> modal.classList.add('show'));
 
   const toastEl = $('#toast');
-  function toast(msg, ms=1300){
+  function toast(msg, ms=3000){
     toastEl.textContent = msg || 'Acción realizada';
     toastEl.classList.add('show');
     setTimeout(()=> toastEl.classList.remove('show'), ms);
@@ -33,7 +33,7 @@
 
   // estado
   let ALL  = [];    // [{nombre,categoria,variantes:[{presentacion,unidad,precio_usd,precio_bs}], imagen?}]
-  let RATE = 6.96;
+  let RATE = 6.96;  // NO tocamos TC (solo mostramos lo que venga del JSON)
   let CART = [];    // [{nombre,presentacion,unidad,cantidad,precio_usd,precio_bs,pack}]
 
   // utils
@@ -108,7 +108,8 @@
       const btnWrap = row.querySelector('.btn-wrap');
       const name    = row.getAttribute('data-name');
 
-      selectFirstAvailable(); // auto-pick primera presentación con stock
+      // auto-seleccionar la primera presentación disponible (>0)
+      selectFirstAvailable();
 
       function getData(){
         const p = ALL.find(x=>x.nombre===name);
@@ -130,10 +131,11 @@
 
         const available = isAvailable(v);
         addBtn.disabled = !available;
-        if (!available && showToastIfUnavailable) {
-          toast('En estos momentos no tenemos disponible esta presentación', 3000);
+        if (!available && showToastIfUnavailable){
+          toast('En estos momentos no tenemos disponible esta presentación');
         }
 
+        // hint de múltiplos
         const pack = packFromPres(v.presentacion);
         qtyEl.placeholder = pack > 1 ? `Cantidad (múltiplos de ${pack})` : 'Cantidad';
       }
@@ -151,23 +153,25 @@
         qtyEl.classList.remove('invalid');
         updatePriceAndState(false);
       });
+      // si está deshabilitado y hacen click en el área del botón, avisar
       btnWrap.addEventListener('click', (e)=>{
         if (addBtn.disabled){
           e.preventDefault();
-          toast('Este producto no está disponible en este momento', 3000);
+          toast('Este producto no está disponible en este momento');
         }
       });
 
       addBtn.addEventListener('click', ()=>{
         const { p, v } = getData();
         const cantidad = num(qtyEl.value);
-        if (!isAvailable(v)) { toast('Este producto no está disponible en este momento', 3000); return; }
+        if (!isAvailable(v)) { toast('Este producto no está disponible en este momento'); return; }
         if (!cantidad){ qtyEl.focus(); return; }
 
+        // múltiplos por presentación
         const pack = packFromPres(v.presentacion);
         if (pack > 0 && cantidad % pack !== 0){
           qtyEl.classList.add('invalid');
-          toast(`La cantidad debe ser múltiplo de ${pack}`, 3000);
+          toast(`La cantidad debe ser múltiplo de ${pack}`);
           return;
         }
 
@@ -183,7 +187,7 @@
 
         qtyEl.value = '';
         updateCart();
-        toast('Se añadió a tu carrito');
+        toast('Se añadió a tu carrito', 1300);
       });
     });
   }
@@ -198,12 +202,10 @@
     CART.splice(i,1);
     updateCart();
   }
-
-  function totals(){
-    const usd = CART.reduce((a,x)=> a + x.precio_usd * x.cantidad, 0);
-    const bs  = CART.reduce((a,x)=> a + x.precio_bs  * x.cantidad, 0);
-    return { usd, bs };
-  }
+  const totals = () => ({
+    usd: CART.reduce((a,x)=> a + x.precio_usd * x.cantidad, 0),
+    bs : CART.reduce((a,x)=> a + x.precio_bs  * x.cantidad, 0)
+  });
 
   function updateCart(){
     if (!CART.length){
@@ -233,15 +235,14 @@
           CART[i].cantidad = v;
           const pack = CART[i].pack || packFromPres(CART[i].presentacion);
           if (pack > 0 && v % pack !== 0){ inp.classList.add('invalid'); } else { inp.classList.remove('invalid'); }
-          updateCart();
+          paintTotals();
         });
       });
 
-      const t = totals();
-      totalsEl.innerHTML = `Total: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)}<br><span class="muted">TC ${fmt2(RATE)}</span>`;
+      paintTotals();
     }
 
-    // modal (móvil)
+    // modal (móvil) clona el mismo HTML para mantener alturas y evitar “bailes”
     cartM.innerHTML = cartEl.innerHTML || `<div class="empty">Tu carrito está vacío.</div>`;
     totalsM.innerHTML = totalsEl.innerHTML || '';
     cartM.querySelectorAll('.rm').forEach(b=> b.addEventListener('click',()=> removeAt(+b.getAttribute('data-i'))));
@@ -261,11 +262,16 @@
     cartBadge.style.display = count>0 ? 'inline-block' : 'none';
     if (count>0) cartBadge.textContent = String(count);
 
-    // CTA mínimo
+    // CTA por mínimo
     const t = totals();
     const okMin = t.usd >= MIN_ORDER_USD;
     sendEl.disabled = !okMin || CART.length===0;
     sendM.disabled  = !okMin || CART.length===0;
+  }
+
+  function paintTotals(){
+    const t = totals();
+    totalsEl.innerHTML = `Total: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)}<br><span class="muted">TC ${fmt2(RATE)}</span>`;
   }
 
   /* ===================== WhatsApp ===================== */
@@ -286,7 +292,7 @@
 
   function trySend(){
     const t = totals();
-    if (t.usd < MIN_ORDER_USD){ toast('La compra mínima es de US$ 3.000', 3000); return; }
+    if (t.usd < MIN_ORDER_USD){ toast('La compra mínima es de US$ 3.000'); return; }
     const txt = buildWaText();
     if (WA_NUMBER) window.location.href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(txt)}`;
     else           window.location.href = `https://wa.me/?text=${encodeURIComponent(txt)}`;
@@ -301,6 +307,7 @@
       if(!r.ok) throw new Error('HTTP '+r.status);
       const { items=[], rate=6.96 } = await r.json();
 
+      // normaliza items al formato con variantes
       ALL = items.map(it=>{
         if (Array.isArray(it.variantes)) return it;
         const v = [{
@@ -309,7 +316,12 @@
           precio_usd: num(it.precio_usd),
           precio_bs : num(it.precio_bs)
         }];
-        return { nombre: it.nombre || it.sku || '', categoria: it.categoria || it.tipo || '', variantes: v, imagen: it.imagen };
+        return {
+          nombre: it.nombre || it.sku || '',
+          categoria: it.categoria || it.tipo || '',
+          variantes: v,
+          imagen: it.imagen || null
+        };
       });
 
       RATE = Number(rate) || 6.96;
