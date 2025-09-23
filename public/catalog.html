@@ -39,10 +39,13 @@
     .footer { display:flex; gap:8px; flex-wrap:wrap; }
     .pill { padding:6px 10px; border-radius:999px; border:1px solid #223047; background:#0e131a; color:#cfe6f5; cursor:pointer; font-size:12px; }
     .pill.active { background:#17313a; border-color:#285561; color:#e6f7ff; }
+    .error { margin:24px 0; padding:12px; border-radius:12px; background:#2b1111; border:1px solid #512020; color:#ffd9d9; }
+    .error code { color:#ffe7a3; word-break: break-all; }
   </style>
 </head>
 <body
-  data-csv-url="PUT_CSV_URL_HERE"
+  data-csv-url="PUT_CSV_URL_HERE"      <!-- Ej: https://docs.google.com/spreadsheets/d/ID/pub?output=csv -->
+  data-json-url=""                      <!-- opcional: si usas /catalog.json propio -->
   data-wa-number="5917XXXXXXXX"
 >
   <header>
@@ -68,6 +71,7 @@
       <section>
         <div id="chips" class="footer" style="margin: 8px 0 14px"></div>
         <div id="cards" class="cards"></div>
+        <div id="err" class="error" style="display:none"></div>
       </section>
 
       <aside class="panel">
