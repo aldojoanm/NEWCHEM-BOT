@@ -291,48 +291,53 @@ async function fetchFBProfileName(psid){
   const qs = `fields=first_name,last_name,name,profile_pic&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
 
   async function tryOnce() {
-    const r = await httpFetchAny(`${urlBase}?${qs}`, { method:'GET' });
+    const r = await httpFetchAny(`${urlBase}?${qs}`);
     if (!r.ok) {
       const t = await r.text().catch(()=> '');
-      console.error('FB profile fetch failed:', r.status, t);
+      // Silenciar 100/33 (objeto no accesible) y loggear otros errores
+      if (!(r.status === 400 && /error_subcode"?\s*:\s*33/.test(t))) {
+        console.error('FB profile fetch failed:', r.status, t);
+      }
       return null;
     }
     const j = await r.json();
-
-    // Preferimos first/last, pero si sólo viene "name", úsalo.
     const fn = (j.first_name || '').trim();
     const ln = (j.last_name  || '').trim();
     let raw = [fn, ln].filter(Boolean).join(' ').trim();
     if (!raw && j.name) raw = String(j.name).trim();
-
-    if (!raw) return null;
-    // Normalizamos: Título y hasta 80 chars.
-    return title(raw).slice(0, 80);
+    return raw ? title(raw).slice(0, 80) : null;
   }
 
-  // Pequeño retry por si el primer hit viene vacío (latencia/propagación)
   const first = await tryOnce();
   if (first) return first;
-  await new Promise(res => setTimeout(res, 300)); // 300ms backoff
+  await new Promise(res => setTimeout(res, 300));
   return await tryOnce();
 }
+
 
 
 async function ensureProfileName(psid){
   const s = getSession(psid);
   if (s.profileName) return s.profileName;
+  if (s.meta?.profileFetchFailed) return null; // evita reintentos ruidosos
+
   const n = await fetchFBProfileName(psid);
   if (n) s.profileName = n;
+  else {
+    s.meta = s.meta || {};
+    s.meta.profileFetchFailed = true; // marcamos que falló
+  }
   return s.profileName || null;
 }
 
 // ===== PREGUNTAS ATÓMICAS =====
 async function askName(psid){
-  const s=getSession(psid);
-  if (s.pending!=='nombre') s.pending='nombre';
-  if (!shouldPrompt(s,'askName')) return;
+  const s = getSession(psid);
+  if (s.pending !== 'nombre') s.pending = 'nombre';
+  if (!shouldPrompt(s, 'askName')) return;
   await sendText(psid, 'Antes de continuar, ¿Cuál es tu nombre completo? ✍️');
 }
+
 async function askDepartamento(psid){
   const s = getSession(psid);
   if (s.pending !== 'departamento') s.pending = 'departamento';
@@ -456,13 +461,25 @@ async function showHelp(psid){
 
 // ===== Orquestador =====
 async function nextStep(psid){
-  const s=getSession(psid);
-  if(!s.profileName) await ensureProfileName(psid);
-  if(!s.vars.departamento) return askDepartamento(psid);
-  if(s.vars.departamento==='Santa Cruz' && !s.vars.subzona) return askSubzonaSCZ(psid);
-  if(s.vars.departamento!=='Santa Cruz' && !s.vars.subzona) return askSubzonaLibre(psid);
+  const s = getSession(psid);
+
+  // 1) Intentar obtener nombre del perfil una vez
+  if (!s.profileName) {
+    await ensureProfileName(psid);
+    if (!s.profileName) {
+      // Si no hay nombre de perfil (Graph 400, etc), lo pedimos al usuario.
+      return askName(psid);
+    }
+  }
+
+  // 2) Luego flujo normal
+  if (!s.vars.departamento) return askDepartamento(psid);
+  if (s.vars.departamento === 'Santa Cruz' && !s.vars.subzona) return askSubzonaSCZ(psid);
+  if (s.vars.departamento !== 'Santa Cruz' && !s.vars.subzona) return askSubzonaLibre(psid);
+
   return finishAndWhatsApp(psid);
 }
+
 
 // ===== VERIFY =====
 router.get('/webhook',(req,res)=>{
@@ -471,26 +488,22 @@ router.get('/webhook',(req,res)=>{
   res.sendStatus(403);
 });
 
-// ===== Aperturas inteligentes (antes de pedir nombre) =====
-// ===== Aperturas inteligentes (antes de pedir nombre) =====
 async function handleOpeningIntent(psid, text){
   const s = getSession(psid);
 
-    if (wantsAdInfo(text)) {
-      markSource(s, s.meta?.source || 'AD_INFO');
-      s.meta.first_message_text = s.meta.first_message_text || text;
+  if (wantsAdInfo(text)) {
+    markSource(s, s.meta?.source || 'AD_INFO');
+    s.meta.first_message_text = s.meta.first_message_text || text;
 
-      await replyAdInfo(psid);
-      await ensureProfileName(psid);
-      await askDepartamento(psid);
-      return true;
-    }
+    await replyAdInfo(psid);
+    await nextStep(psid);
+    return true;
+  }
 
   if (isAutoFAQ(text)) {
     markSource(s, s.meta?.source || 'AUTOFAQ');
     s.meta.first_message_text = s.meta.first_message_text || text;
-    await ensureProfileName(psid);
-    await askDepartamento(psid);
+    await nextStep(psid);
     return true;
   }
 
@@ -509,8 +522,7 @@ async function handleOpeningIntent(psid, text){
       `¡Excelente! Sobre *${prod.nombre}* puedo ayudarte con una cotización. ` +
       `Para enviarte una cotización sin compromiso, podrias ayudarme con unos datos rápidos.`
     );
-    await ensureProfileName(psid);
-    await askDepartamento(psid);
+    await nextStep(psid);
     return true;
   }
 
@@ -524,8 +536,7 @@ async function handleOpeningIntent(psid, text){
       '¡Con gusto te preparo una **cotización personalizada**! ' +
       'Me podrías ayudar con algunos datos para asignarte el asesor correcto.'
     );
-    await ensureProfileName(psid);
-    await askDepartamento(psid);
+    await nextStep(psid);
     return true;
   }
 
@@ -541,8 +552,7 @@ async function handleOpeningIntent(psid, text){
     );
     await sendText(psid, 'Si algo del catálogo te llamó la atención, cuéntame el *nombre del producto* y lo avanzamos de inmediato. 🙂');
     getSession(psid).pending = 'prod_from_catalog';
-    await ensureProfileName(psid);
-    await askDepartamento(psid);
+    await nextStep(psid);
     return true;
   }
 
@@ -555,8 +565,7 @@ async function handleOpeningIntent(psid, text){
     ]);
     await sendText(psid, '¿Qué *producto* te interesó del catálogo? Si me dices el nombre, te ayudo con precio y disponibilidad. 🙂');
     getSession(psid).pending = 'prod_from_catalog';
-    await ensureProfileName(psid);
-    await askDepartamento(psid);
+    await nextStep(psid);
     return true;
   }
 
@@ -569,229 +578,245 @@ router.post('/webhook', async (req,res)=>{
     if(req.body.object!=='page') return res.sendStatus(404);
 
     for(const entry of (req.body.entry||[])){
-      for(const ev of (entry.messaging||[])){
-        const psid = ev?.sender?.id; if(!psid) continue;
+      for (const ev of (entry.messaging || [])) {
+  const psid = ev?.sender?.id; if (!psid) continue;
 
-        // FB puede reintentar: de-dup por MID
-        const mid = ev.message?.mid || ev.postback?.mid || null;
-        if (alreadyProcessed(mid)) continue;
+  // FB puede reintentar: de-dup por MID
+  const mid = ev.message?.mid || ev.postback?.mid || null;
+  if (alreadyProcessed(mid)) continue;
 
-        if(ev.message?.is_echo) continue;
+  if (ev.message?.is_echo) continue;
 
-        const s = getSession(psid);
-        // Marcar origen por referral/postback si viene
-        if (ev.referral){
-          s.meta = s.meta || {};
-          s.meta.referral_raw = s.meta.referral_raw || ev.referral;
-          markSource(s, s.meta.source || 'ADS_REFERRAL');
-        }
-        if (ev.postback && ev.postback.payload === 'GET_STARTED'){
-          markSource(s, s.meta?.source || 'GET_STARTED');
-        }
+  const s = getSession(psid);
 
+  // Marcar origen por referral/postback si viene
+  if (ev.referral){
+    s.meta = s.meta || {};
+    s.meta.referral_raw = s.meta.referral_raw || ev.referral;
+    markSource(s, s.meta.source || 'ADS_REFERRAL');
+  }
+  if (ev.postback && ev.postback.payload === 'GET_STARTED'){
+    markSource(s, s.meta?.source || 'GET_STARTED');
+  }
 
-        // === GET_STARTED (postback, referral, opt-in) ===
-        if (isGetStartedEvent(ev)) {
-          s.flags.greeted = true;
-          s.flags.justOpenedAt = Date.now();
-          await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
-          await ensureProfileName(psid);
-          await askDepartamento(psid);
-          continue;
-        }
+  // === GET_STARTED (postback, referral, opt-in) ===
+  if (isGetStartedEvent(ev)) {
+    s.flags.greeted = true;
+    s.flags.justOpenedAt = Date.now();
+    await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
+    await nextStep(psid);
+    continue;
+  }
 
-        
-        // INPUT
-        let text = (ev.message?.text||'').trim();
-        const qr = ev.message?.quick_reply?.payload || null;
-        
-        if(qr){
-          if(qr==='QR_FINALIZAR'){
-            await sendText(psid, '¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋');
-            clearSession(psid);
-            continue;
-          }
-          if(qr==='QR_CONTINUAR'){ await showHelp(psid); continue; }
+  // INPUT (declarar text/qr ANTES de usar text en cualquier lado)
+  let text = (ev.message?.text || '').trim();
+  const qr = ev.message?.quick_reply?.payload || null;
 
-          if(qr==='OPEN_CATALOG'){
-            await sendButtons(psid, 'Abrir catálogo completo', [{type:'web_url', url: 'https://tinyurl.com/f4euhvzk', title:'Ver catálogo'}]);
-            await sendText(psid, '¿Te interesó algún producto del catálogo?');
-            s.pending = 'prod_from_catalog';
-            await showHelp(psid); continue;
-          }
-          if(qr==='OPEN_LOCATION'){
-            await sendButtons(psid, 'Nuestra ubicación en Google Maps 👇', [{type:'web_url', url: linkMaps(), title:'Ver ubicación'}]);
-            await showHelp(psid); continue;
-          }
-          if(qr==='OPEN_HORARIOS'){
-            await sendText(psid, `Nuestro horario: ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`);
-            await showHelp(psid); continue;
-          }
-          if(qr==='OPEN_WHATSAPP'){
-            const wa = whatsappLinkFromSession(s);
-            if (wa) await sendButtons(psid,'Te atiende un asesor por WhatsApp 👇',[{type:'web_url', url: wa, title:'📲 Abrir WhatsApp'}]);
-            else await sendText(psid,'Compártenos un número de contacto y seguimos por WhatsApp.');
-            await showHelp(psid); continue;
-          }
+  if (qr) {
+    if (qr === 'QR_FINALIZAR') {
+      await sendText(psid, '¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋');
+      clearSession(psid);
+      continue;
+    }
+    if (qr === 'QR_CONTINUAR') { await showHelp(psid); continue; }
 
-          if(/^DPTO_/.test(qr)){
-            const depRaw = qr.replace('DPTO_','').replace(/_/g,' ');
-            const dep = canonicalizeDepartamento(depRaw);
-            s.vars.departamento = dep; s.vars.subzona = null; s.pending=null;
-            if(dep==='Santa Cruz') await askSubzonaSCZ(psid); else await askSubzonaLibre(psid);
-            continue;
-          }
-          if(/^SUBZ_/.test(qr)){
-            const z = qr.replace('SUBZ_','').toLowerCase();
-            const mapa = { norte:'Norte', este:'Este', sur:'Sur', valles:'Valles', chiquitania:'Chiquitania' };
-            if (s.vars.departamento==='Santa Cruz') s.vars.subzona = mapa[z] || null;
-            s.pending=null; await nextStep(psid); continue;
-          }
+    if (qr === 'OPEN_CATALOG') {
+      await sendButtons(psid, 'Abrir catálogo completo', [{ type:'web_url', url: 'https://tinyurl.com/f4euhvzk', title:'Ver catálogo' }]);
+      await sendText(psid, '¿Te interesó algún producto del catálogo?');
+      s.pending = 'prod_from_catalog';
+      await showHelp(psid); continue;
+    }
+    if (qr === 'OPEN_LOCATION') {
+      await sendButtons(psid, 'Nuestra ubicación en Google Maps 👇', [{ type:'web_url', url: linkMaps(), title:'Ver ubicación' }]);
+      await showHelp(psid); continue;
+    }
+    if (qr === 'OPEN_HORARIOS') {
+      await sendText(psid, `Nuestro horario: ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`);
+      await showHelp(psid); continue;
+    }
+    if (qr === 'OPEN_WHATSAPP') {
+      const wa = whatsappLinkFromSession(s);
+      if (wa) await sendButtons(psid,'Te atiende un asesor por WhatsApp 👇',[{type:'web_url', url: wa, title:'📲 Abrir WhatsApp'}]);
+      else await sendText(psid,'Compártenos un número de contacto y seguimos por WhatsApp.');
+      await showHelp(psid); continue;
+    }
 
-          text = qr.replace(/^QR_/,'').replace(/_/g,' ').trim() || text;
-        }
+    if (/^DPTO_/.test(qr)) {
+      const depRaw = qr.replace('DPTO_', '').replace(/_/g, ' ');
+      const dep = canonicalizeDepartamento(depRaw);
+      s.vars.departamento = dep; s.vars.subzona = null; s.pending = null;
+      if (dep === 'Santa Cruz') await askSubzonaSCZ(psid); else await askSubzonaLibre(psid);
+      continue;
+    }
+    if (/^SUBZ_/.test(qr)) {
+      const z = qr.replace('SUBZ_', '').toLowerCase();
+      const mapa = { norte:'Norte', este:'Este', sur:'Sur', valles:'Valles', chiquitania:'Chiquitania' };
+      if (s.vars.departamento === 'Santa Cruz') s.vars.subzona = mapa[z] || null;
+      s.pending = null; await nextStep(psid); continue;
+    }
 
-        if (!s.meta?.first_message_text) {
-          s.meta = s.meta || {};
-          s.meta.first_message_text = text;
+    // Si el QR era de texto (QR_...), lo normalizamos a text
+    text = qr.replace(/^QR_/, '').replace(/_/g, ' ').trim() || text;
+  }
 
-          // Sólo etiquetar como TEXT_FIRST si NO cae en alguna intención conocida
-          const looksAutoFAQ = isAutoFAQ(text);
-          const looksGreeting = isGreeting(text);
-          const looksProduct  = !!findProduct(text);
-          const looksQuote    = asksPrice(text);
-          const looksCatalog  = wantsCatalog(text) || asksProducts(text);
+  // Registrar primer texto si aplica
+  if (!s.meta?.first_message_text) {
+    s.meta = s.meta || {};
+    s.meta.first_message_text = text;
 
-          if (!s.meta?.source && !looksAutoFAQ && !looksGreeting && !looksProduct && !looksQuote && !looksCatalog) {
-            markSource(s, 'TEXT_FIRST');
-          }
-        }
+    // Sólo etiquetar como TEXT_FIRST si NO cae en alguna intención conocida
+    const looksAutoFAQ = isAutoFAQ(text);
+    const looksGreeting = isGreeting(text);
+    const looksProduct  = !!findProduct(text);
+    const looksQuote    = asksPrice(text);
+    const looksCatalog  = wantsCatalog(text) || asksProducts(text);
 
-        // 1) Usuario escribe sin tocar “Empezar”
-        if (!s.flags.greeted && (isGreeting(text) || isAutoFAQ(text))) {
-          s.flags.greeted = true;
-          s.flags.justOpenedAt = Date.now();
-          markSource(s, s.meta?.source || (isAutoFAQ(text) ? 'AUTOFAQ' : 'GREETING_TEXT'));
+    if (!s.meta?.source && !looksAutoFAQ && !looksGreeting && !looksProduct && !looksQuote && !looksCatalog) {
+      markSource(s, 'TEXT_FIRST');
+    }
+  }
 
-          await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
+  // 1) Usuario escribe sin tocar “Empezar”
+  if (!s.flags.greeted && (isGreeting(text) || isAutoFAQ(text))) {
+    s.flags.greeted = true;
+    s.flags.justOpenedAt = Date.now();
+    markSource(s, s.meta?.source || (isAutoFAQ(text) ? 'AUTOFAQ' : 'GREETING_TEXT'));
 
-          const handled = await handleOpeningIntent(psid, text); // si es AutoFAQ/producto, sigue
-          if(!handled){ 
-            await ensureProfileName(psid); 
-            await askDepartamento(psid); 
-          }
-          continue;
-        }
+    await sendText(psid, '👋 ¡Hola! Bienvenido(a) a New Chem.\nTenemos agroquímicos al mejor precio y calidad para tu campaña. 🌱');
 
-        if (wantsAdInfo(text) && s.flags.greeted) {
-          await replyAdInfo(psid);
-          await nextStep(psid);
-          continue;
-        }
+    const handled = await handleOpeningIntent(psid, text); // si es AutoFAQ/producto, sigue
+    if (!handled){
+      await nextStep(psid);
+    }
+    continue;
+  }
 
-        // 2) Anti-spam de saludos durante la apertura (8s)
-        if(!s.profileName && s.pending==='nombre' && isGreeting(text)){
-          if (Date.now() - (s.flags.justOpenedAt||0) < 8000) continue;
-        }
+  if (wantsAdInfo(text) && s.flags.greeted) {
+    await replyAdInfo(psid);
+    await nextStep(psid);
+    continue;
+  }
 
-        // “Quiero seguir / otra duda” escrito como texto
-        if (wantsMoreHelp(text)){
-          await showHelp(psid);
-          continue;
-        }
+  // 2) Anti-spam de saludos durante la apertura (8s)
+  if (!s.profileName && s.pending === 'nombre' && isGreeting(text)) {
+    if (Date.now() - (s.flags.justOpenedAt || 0) < 8000) continue;
+  }
 
-        // === PRODUCTO desde catálogo (captura antes del nombre)
-        if(s.pending==='prod_from_catalog'){
-          const prod = findProduct(text);
-          if (prod){
-            s.vars.productIntent = prod.nombre;
-            s.pending=null;
-            await ensureProfileName(psid);
-            await nextStep(psid);
-            continue;
-          }else{
-            await sendText(psid,'No identifiqué el producto. ¿Podrías escribir el *nombre exacto* tal como aparece en el catálogo?');
-            continue;
-          }
-        }
+  // === CAPTURA DE NOMBRE (cuando lo pedimos explícitamente) ===
+  if (s.pending === 'nombre') {
+    const typed = (text || '').trim();
+    if (typed && !isGreeting(typed)) {
+      s.profileName = title(typed).slice(0, 80);
+      s.pending = null;
+      await nextStep(psid);
+      continue;
+    } else {
+      await askName(psid);
+      continue;
+    }
+  }
 
-        // === APERTURA INTELIGENTE cuando aún no tenemos nombre ===
-        if(!s.profileName){
-          const handled = await handleOpeningIntent(psid, text);
-          if(handled) continue;
-        }
+  // “Quiero seguir / otra duda”
+  if (wantsMoreHelp(text)){
+    await showHelp(psid);
+    continue;
+  }
 
-        // Captura pasiva
-        const ha   = parseHectareas(text); if(ha) s.vars.hectareas = ha;
-        const phone= parsePhone(text);     if(phone) s.vars.phone = phone;
+  // === PRODUCTO desde catálogo (captura antes del nombre) ===
+  if (s.pending === 'prod_from_catalog') {
+    const prod = findProduct(text);
+    if (prod){
+      s.vars.productIntent = prod.nombre;
+      s.pending = null;
+      await nextStep(psid);
+      continue;
+    } else {
+      await sendText(psid,'No identifiqué el producto. ¿Podrías escribir el *nombre exacto* tal como aparece en el catálogo?');
+      continue;
+    }
+  }
 
-        // === PREGUNTAS DE ENVÍO (en cualquier etapa)
-        if(asksShipping(text)){
-          await sendText(psid,
-            'Realizamos la **entrega en nuestro almacén de Santa Cruz de la Sierra**. ' +
-            'Si lo necesitas, **podemos ayudarte a coordinar la logística del transporte** hasta tu zona, ' +
-            'pero este servicio no viene incluido 🙂'
-          );
-          await nextStep(psid);
-          continue;
-        }
+  // === APERTURA INTELIGENTE cuando aún no tenemos nombre ===
+  if (!s.profileName) {
+    const handled = await handleOpeningIntent(psid, text);
+    if (handled) continue;
+  }
 
-        // === CAPTURA DE NOMBRE (sin aceptar saludos como nombre) ===
-          if(!s.profileName){
-            await ensureProfileName(psid);
-            if(s.profileName){ await askDepartamento(psid); continue; }
-          }
+  // Captura pasiva
+  const ha = parseHectareas(text); if (ha) s.vars.hectareas = ha;
+  const phone = parsePhone(text);  if (phone) s.vars.phone = phone;
 
-        // === DEPARTAMENTO (acepta texto aunque espere QR) ===
-        if(!s.vars.departamento || s.pending==='departamento'){
-          const depTyped = canonicalizeDepartamento(text);
-          if(depTyped){
-            s.vars.departamento = depTyped; s.vars.subzona=null; s.pending=null;
-            if(depTyped==='Santa Cruz') await askSubzonaSCZ(psid); else await askSubzonaLibre(psid);
-            continue;
-          }else if(s.pending==='departamento'){
-            await askDepartamento(psid);
-            continue;
-          }
-        }
+  // === PREGUNTAS DE ENVÍO (en cualquier etapa)
+  if (asksShipping(text)) {
+    await sendText(psid,
+      'Realizamos la **entrega en nuestro almacén de Santa Cruz de la Sierra**. ' +
+      'Si lo necesitas, **podemos ayudarte a coordinar la logística del transporte** hasta tu zona, ' +
+      'pero este servicio no viene incluido 🙂'
+    );
+    await nextStep(psid);
+    continue;
+  }
 
-        // === SUBZONA SCZ (texto o QR) ===
-        if(s.vars.departamento==='Santa Cruz' && (!s.vars.subzona || s.pending==='subzona')){
-          const z = detectSubzonaSCZ(text);
-          if(z){ s.vars.subzona = z; s.pending=null; await nextStep(psid); continue; }
-          if(s.pending==='subzona'){ await askSubzonaSCZ(psid); continue; }
-        }
+  // === CAPTURA DE NOMBRE (fallback si aún no lo tenemos) ===
+  if (!s.profileName) {
+    await ensureProfileName(psid);
+    if (s.profileName) { await nextStep(psid); continue; }
+    // si Graph no dio nombre, pedirlo explícitamente
+    await askName(psid);
+    continue;
+  }
 
-        // === SUBZONA libre para otros dptos ===
-        if(s.pending==='subzona_free' && !s.vars.subzona){
-          const z = title(text.trim());
-          if (z){ s.vars.subzona = z; s.pending=null; await nextStep(psid); }
-          else { await askSubzonaLibre(psid); }
-          continue;
-        }
+  // === DEPARTAMENTO (acepta texto aunque espere QR)
+  if (!s.vars.departamento || s.pending === 'departamento') {
+    const depTyped = canonicalizeDepartamento(text);
+    if (depTyped) {
+      s.vars.departamento = depTyped; s.vars.subzona = null; s.pending = null;
+      if (depTyped === 'Santa Cruz') await askSubzonaSCZ(psid); else await askSubzonaLibre(psid);
+      continue;
+    } else if (s.pending === 'departamento') {
+      await askDepartamento(psid);
+      continue;
+    }
+  }
 
-        // Intenciones globales (responden siempre)
-        if(wantsLocation(text)){ await sendButtons(psid, 'Nuestra ubicación en Google Maps 👇', [{type:'web_url', url: linkMaps(), title:'Ver ubicación'}]); await showHelp(psid); continue; }
-        if(wantsCatalog(text)){  await sendButtons(psid, 'Abrir catálogo completo', [{type:'web_url', url: CATALOG_URL, title:'Ver catálogo'}]); await sendText(psid,'¿Qué *producto* te interesó del catálogo?'); s.pending='prod_from_catalog'; await showHelp(psid); continue; }
-        if(asksPrice(text)){
-          const prodHit = findProduct(text);
-          if (prodHit) s.vars.productIntent = prodHit.nombre;
-          await sendText(psid, 'Con gusto te preparamos una *cotización*. Primero confirmemos tu ubicación para asignarte el asesor correcto.');
-          await nextStep(psid);
-          continue;
-        }
-        if(wantsAgent(text)){    const wa = whatsappLinkFromSession(s); if (wa) await sendButtons(psid,'Te atiende un asesor por WhatsApp 👇',[{type:'web_url', url: wa, title:'📲 Abrir WhatsApp'}]); else await sendText(psid,'Compártenos un número de contacto y seguimos por WhatsApp.'); await showHelp(psid); continue; }
-        if(wantsClose(text)){    await sendText(psid, '¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋'); clearSession(psid); continue; }
+  // === SUBZONA SCZ (texto o QR)
+  if (s.vars.departamento === 'Santa Cruz' && (!s.vars.subzona || s.pending === 'subzona')) {
+    const z = detectSubzonaSCZ(text);
+    if (z) { s.vars.subzona = z; s.pending = null; await nextStep(psid); continue; }
+    if (s.pending === 'subzona') { await askSubzonaSCZ(psid); continue; }
+  }
 
-        // Si hay etapa pendiente, re-pregunta con TTL
-        if(s.pending==='departamento'){ await askDepartamento(psid); continue; }
-        if(s.pending==='subzona'){ await askSubzonaSCZ(psid); continue; }
-        if(s.pending==='subzona_free'){ await askSubzonaLibre(psid); continue; }
+  // === SUBZONA libre para otros dptos
+  if (s.pending === 'subzona_free' && !s.vars.subzona) {
+    const z = title(text.trim());
+    if (z) { s.vars.subzona = z; s.pending = null; await nextStep(psid); }
+    else { await askSubzonaLibre(psid); }
+    continue;
+  }
 
-        // Si nada aplica, ofrece ayuda amable
-        await sendText(psid, 'Puedo ayudarte con *cotizaciones, catálogo, horarios, ubicación y envíos*.');
-        await showHelp(psid);
-      }
+  // Intenciones globales (responden siempre)
+  if (wantsLocation(text)) { await sendButtons(psid, 'Nuestra ubicación en Google Maps 👇', [{type:'web_url', url: linkMaps(), title:'Ver ubicación'}]); await showHelp(psid); continue; }
+  if (wantsCatalog(text))  { await sendButtons(psid, 'Abrir catálogo completo', [{type:'web_url', url: CATALOG_URL, title:'Ver catálogo'}]); await sendText(psid,'¿Qué *producto* te interesó del catálogo?'); s.pending='prod_from_catalog'; await showHelp(psid); continue; }
+  if (asksPrice(text)) {
+    const prodHit = findProduct(text);
+    if (prodHit) s.vars.productIntent = prodHit.nombre;
+    await sendText(psid, 'Con gusto te preparamos una *cotización*. Primero confirmemos tu ubicación para asignarte el asesor correcto.');
+    await nextStep(psid);
+    continue;
+  }
+  if (wantsAgent(text)) { const wa = whatsappLinkFromSession(s); if (wa) await sendButtons(psid,'Te atiende un asesor por WhatsApp 👇',[{type:'web_url', url: wa, title:'📲 Abrir WhatsApp'}]); else await sendText(psid,'Compártenos un número de contacto y seguimos por WhatsApp.'); await showHelp(psid); continue; }
+  if (wantsClose(text)) { await sendText(psid, '¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋'); clearSession(psid); continue; }
+
+  // Si hay etapa pendiente, re-pregunta con TTL
+  if (s.pending === 'departamento') { await askDepartamento(psid); continue; }
+  if (s.pending === 'subzona')      { await askSubzonaSCZ(psid); continue; }
+  if (s.pending === 'subzona_free') { await askSubzonaLibre(psid); continue; }
+
+  // Si nada aplica, ofrece ayuda amable
+  await sendText(psid, 'Puedo ayudarte con *cotizaciones, catálogo, horarios, ubicación y envíos*.');
+  await showHelp(psid);
+}
+
     }
 
     res.sendStatus(200);
