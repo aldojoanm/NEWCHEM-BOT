@@ -6,7 +6,7 @@
 <title>NEW CHEM AGROQUÍMICOS — Catálogo</title>
 <link rel="icon" href="/image/favicon.png" />
 <style>
-  /* ======= Marca ======= */
+  /* ======= Paleta de marca ======= */
   :root{
     --brand1:#8365a2;  /* morado */
     --brand2:#5b67ae;  /* azul */
@@ -42,7 +42,7 @@
     display:flex;align-items:center;gap:14px;
     padding:8px 0 2px 0;border-bottom:1px solid var(--ring);
   }
-  .brand img{width:56px;height:56px;object-fit:contain}
+  .brand img{width:60px;height:60px;object-fit:contain}
   .title{font-size:22px;font-weight:800;letter-spacing:.2px}
   .desc{color:var(--muted);margin:10px 0 6px 0}
 
@@ -64,40 +64,54 @@
   }
 
   /* ======= Tarjetas de producto ======= */
-  .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+  .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
   @media (max-width:820px){ .list{grid-template-columns:1fr} }
 
   .prod{
-    display:grid;grid-template-columns:160px 1fr 170px 120px 120px;gap:12px;
-    align-items:center;padding:14px;border:1px solid var(--ring);border-radius:16px;background:#fff
+    display:grid;grid-template-columns:240px 1fr 200px 180px 150px;gap:14px;
+    align-items:center;padding:16px;border:1px solid var(--ring);border-radius:16px;background:#fff
+  }
+  @media (max-width:1200px){
+    .prod{grid-template-columns:220px 1fr 180px 160px 140px}
+  }
+  @media (max-width:1024px){
+    .prod{grid-template-columns:200px 1fr 170px 150px 140px}
   }
   @media (max-width:820px){
-    .prod{grid-template-columns:120px 1fr;grid-template-areas:
-      "img info"
-      "img pres"
-      "img qty"
-      "img btn";gap:10px}
+    .prod{
+      grid-template-columns:1fr;grid-template-areas:
+      "name"
+      "img"
+      "price"
+      "pres"
+      "qty"
+      "btn";
+      gap:10px
+    }
+    .prod .name{grid-area:name}
     .prod .img{grid-area:img}
-    .prod .info{grid-area:info}
+    .prod .price-note{grid-area:price}
     .prod .pres-wrap{grid-area:pres}
     .prod .qty-wrap{grid-area:qty}
     .prod .btn-wrap{grid-area:btn}
   }
+
   .img img{
-    width:160px;height:160px;object-fit:contain;border:1px solid var(--ring);
+    width:100%;max-width:360px; /* protagonista */
+    height:auto;aspect-ratio:1/1;object-fit:contain;border:1px solid var(--ring);
     border-radius:14px;background:#f7fafc
   }
-  .name{font-weight:900;font-size:16px}
-  .cat{margin-top:4px}
+  .name{font-weight:900;font-size:18px}
+  .cat{margin-top:6px}
   .cat .tag{
     display:inline-block;background:rgba(91,103,174,.12);color:var(--brand2);
     border:1px solid rgba(91,103,174,.25);padding:4px 8px;border-radius:999px;
     font-size:12px;font-weight:700
   }
-  .price-note{color:var(--muted);font-size:12px;margin-top:6px}
+  .price-note{color:var(--muted);font-size:14px;margin-top:8px}
 
   .prod select,.prod input{
-    width:100%;padding:10px 12px;background:#fff;border:1px solid var(--ring);
+    width:100%;padding:12px 12px;background:#fff;border:1px solid var(--ring);
     border-radius:12px;color:var(--text);outline:none
   }
   .sub{color:var(--muted);font-size:12px;margin-top:6px}
@@ -105,9 +119,9 @@
     width:100%;background:linear-gradient(90deg,var(--brand2),var(--brand3));
     border:none;color:#fff;padding:12px;border-radius:12px;font-weight:900;cursor:pointer
   }
-  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
 
-  /* ======= Carrito ======= */
+  /* ======= Carrito (panel derecho) ======= */
   .cart{padding:16px}
   .cart h3{margin:0 0 10px 0;font-size:18px}
   .item{
@@ -125,6 +139,39 @@
   }
   .muted{color:var(--muted);font-size:13px}
   .empty{color:var(--muted);padding:8px}
+
+  /* ======= FAB Carrito + Badge ======= */
+  .fab{
+    position:fixed;right:18px;bottom:18px;background:linear-gradient(90deg,var(--brand2),var(--brand3));
+    width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    color:#fff;box-shadow:var(--shadow);cursor:pointer;z-index:30
+  }
+  .badge{
+    position:absolute;top:-6px;right:-6px;background:#ee5858;color:#fff;border-radius:999px;
+    padding:2px 6px;font-size:12px;font-weight:800
+  }
+  .fab svg{width:26px;height:26px}
+
+  /* ======= Modal Carrito ======= */
+  .modal{position:fixed;inset:0;display:none;z-index:40}
+  .modal.show{display:block}
+  .backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35)}
+  .sheet{
+    position:absolute;left:50%;bottom:0;transform:translateX(-50%);
+    width:min(640px,92vw);max-height:80vh;overflow:auto;background:#fff;border-radius:18px 18px 0 0;
+    box-shadow:var(--shadow);padding:16px
+  }
+  .sheet h3{margin:0 0 8px 0}
+  .sheet .close{position:absolute;right:12px;top:10px;border:1px solid var(--ring);background:#fff;border-radius:10px;padding:6px 10px;cursor:pointer}
+  @media (min-width:1025px){ .fab{display:none} .modal{display:none !important} }
+
+  /* ======= Toast ======= */
+  .toast{
+    position:fixed;left:50%;bottom:90px;transform:translateX(-50%);
+    background:#1f2937;color:#fff;border-radius:12px;padding:10px 14px;box-shadow:var(--shadow);
+    opacity:0;pointer-events:none;transition:opacity .2s ease, transform .2s ease;z-index:50
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-6px)}
 </style>
 </head>
 <body>
@@ -137,7 +184,7 @@
             <img src="/public/logo_newchem.png" alt="NEW CHEM">
             <div>
               <div class="title">NEW CHEM AGROQUÍMICOS</div>
-              <div class="desc">Catálogo de productos. Selecciona presentación y cantidad; el sistema calcula los subtotales y el total en USD y Bs.</div>
+              <div class="desc">Catálogo de productos. Selecciona presentación y cantidad; el sistema calcula los subtotales, el total en USD/Bs y valida la compra mínima.</div>
             </div>
           </div>
           <div class="meta">
@@ -163,6 +210,33 @@
       </div>
     </div>
   </div>
+
+  <!-- FAB carrito (móvil) -->
+  <button id="cartFab" class="fab" aria-label="Abrir carrito">
+    <span id="cartCount" class="badge" style="display:none">0</span>
+    <!-- carrito svg -->
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="9" cy="20" r="1.5"></circle>
+      <circle cx="17" cy="20" r="1.5"></circle>
+      <path d="M3 4h2l2.4 10.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 8H7"></path>
+    </svg>
+  </button>
+
+  <!-- Modal carrito (móvil) -->
+  <div id="cartModal" class="modal" aria-hidden="true">
+    <div class="backdrop"></div>
+    <div class="sheet">
+      <button class="close" id="closeModal">Cerrar</button>
+      <h3>Tu carrito</h3>
+      <div id="cartM"></div>
+      <div class="totals" id="totalsM"></div>
+      <button id="sendM" class="cta">Enviar por WhatsApp</button>
+      <div class="muted" style="margin-top:6px">Compra mínima: US$ 3.000. Puedes combinar productos.</div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast">Se añadió a tu carrito</div>
 
   <script src="/catalog.js"></script>
 </body>
