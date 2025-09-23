@@ -20,24 +20,26 @@
 
   *{box-sizing:border-box}
   html,body{height:100%}
-  body{ margin:0;background:var(--bg);color:var(--text);
-        font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial; }
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+  }
   a{color:inherit;text-decoration:none}
 
-  .wrap{max-width:1280px;margin:24px auto;padding:0 16px}
-  .grid{display:grid;grid-template-columns:1fr 380px;gap:22px}
+  /* contenedor más ancho en desktop */
+  .wrap{max-width:1500px;margin:24px auto;padding:0 16px}
+  .grid{display:grid;grid-template-columns:1fr 420px;gap:24px}
   @media (max-width:1024px){ .grid{grid-template-columns:1fr} }
 
-  .card{ background:var(--panel);border:1px solid var(--ring);border-radius:18px;box-shadow:var(--shadow) }
+  .card{background:var(--panel);border:1px solid var(--ring);border-radius:18px;box-shadow:var(--shadow)}
 
-  /* Header */
-  .site-header{padding:18px 18px 8px 18px}
-  .brand{display:flex;align-items:center;gap:14px;padding:8px 0 2px;border-bottom:1px solid var(--ring)}
-  .brand img{width:60px;height:60px;object-fit:contain}
+  /* Header (sin logo) */
+  .site-header{padding:18px 18px 8px}
+  .brand{display:flex;flex-direction:column;gap:2px;padding:8px 0 10px;border-bottom:1px solid var(--ring)}
   .title{font-size:22px;font-weight:800;letter-spacing:.2px}
-  .desc{color:var(--muted);margin:10px 0 6px}
+  .desc{color:var(--muted);margin:6px 0 0}
 
-  .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px;padding:6px 0 2px}
+  .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px;padding:10px 0 2px}
   .pill{display:inline-block;border:1px solid var(--ring);border-radius:999px;padding:6px 10px}
   .pill.brand{border-color:transparent;background:linear-gradient(90deg,var(--brand1),var(--brand2));color:#fff;font-weight:700}
 
@@ -46,54 +48,55 @@
   .section-title{display:flex;align-items:center;gap:10px;margin:8px 0 14px;font-weight:900;font-size:18px;letter-spacing:.3px}
   .section-title .dot{width:12px;height:12px;border-radius:50%;background:linear-gradient(90deg,var(--brand2),var(--brand3))}
 
-  /* Tarjetas */
-  .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
-  @media (max-width:820px){ .list{grid-template-columns:1fr} }
+  /* Tarjetas → mismo layout que móvil, 2 por fila en desktop */
+  .list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+  @media (max-width:900px){ .list{grid-template-columns:1fr} }
 
   .prod{
-    display:grid;grid-template-columns:240px 1fr 200px 180px 150px;gap:14px;
-    align-items:center;padding:16px;border:1px solid var(--ring);border-radius:16px;background:#fff;min-width:0
+    display:grid;grid-template-columns:1fr;grid-template-areas:
+      "name" "img" "price" "pres" "qty" "btn";
+    gap:12px;padding:16px;border:1px solid var(--ring);border-radius:16px;background:#fff;min-width:0
   }
-  @media (max-width:1200px){ .prod{grid-template-columns:220px 1fr 180px 160px 140px} }
-  @media (max-width:1024px){ .prod{grid-template-columns:200px 1fr 170px 150px 140px} }
-  @media (max-width:820px){
-    .prod{grid-template-columns:1fr;grid-template-areas:
-      "name" "img" "price" "pres" "qty" "btn";gap:10px}
-    .prod .name{grid-area:name}
-    .prod .img{grid-area:img}
-    .prod .price-note{grid-area:price}
-    .prod .pres-wrap{grid-area:pres}
-    .prod .qty-wrap{grid-area:qty}
-    .prod .btn-wrap{grid-area:btn}
-  }
+  .prod .name{grid-area:name}
+  .prod .img{grid-area:img}
+  .prod .price-note{grid-area:price}
+  .prod .pres-wrap{grid-area:pres}
+  .prod .qty-wrap{grid-area:qty}
+  .prod .btn-wrap{grid-area:btn}
 
   .img img{
-    width:100%;max-width:360px;aspect-ratio:1/1;object-fit:contain;border:1px solid var(--ring);
+    width:100%;max-width:420px;margin-inline:auto;
+    aspect-ratio:1/1;object-fit:contain;border:1px solid var(--ring);
     border-radius:14px;background:#f7fafc;display:block
   }
   .name{font-weight:900;font-size:18px;min-width:0}
   .cat{margin-top:6px}
   .cat .tag{display:inline-block;background:rgba(91,103,174,.12);color:var(--brand2);
             border:1px solid rgba(91,103,174,.25);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700}
-  .price-note{color:var(--muted);font-size:14px;margin-top:8px;min-width:0}
+  .price-note{color:var(--muted);font-size:14px;margin-top:4px}
 
-  .prod select,.prod input{ width:100%;padding:12px;background:#fff;border:1px solid var(--ring);border-radius:12px;color:var(--text);outline:none }
+  .prod select,.prod input{width:100%;padding:12px;background:#fff;border:1px solid var(--ring);border-radius:12px;color:var(--text);outline:none}
   .prod input.invalid{border-color:#e76a6a;box-shadow:0 0 0 3px rgba(231,106,106,.15)}
   .sub{color:var(--muted);font-size:12px;margin-top:6px}
-  .btn{ width:100%;background:linear-gradient(90deg,var(--brand2),var(--brand3));border:none;color:#fff;padding:12px;border-radius:12px;font-weight:900;cursor:pointer;white-space:nowrap }
+  .btn{width:100%;background:linear-gradient(90deg,var(--brand2),var(--brand3));border:none;color:#fff;padding:12px;border-radius:12px;font-weight:900;cursor:pointer}
   .btn:disabled{opacity:.45;cursor:not-allowed}
 
-  /* Carrito */
+  /* Carrito (panel derecho) */
   .cart{padding:16px}
   .cart h3{margin:0 0 10px;font-size:18px}
-  .item{display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--ring)}
+  .item{
+    display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;
+    padding:10px 0;border-bottom:1px solid var(--ring)
+  }
+  .item > div:first-child{min-width:0}
+  .item > div:first-child strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item input{width:100%;padding:8px 10px;border:1px solid var(--ring);border-radius:10px}
   .item input.invalid{border-color:#e76a6a;box-shadow:0 0 0 3px rgba(231,106,106,.15)}
   .rm{background:#fff;border:1px solid var(--ring);border-radius:8px;color:#6c7a87;cursor:pointer}
   .totals{margin-top:10px;border-top:2px solid var(--ring);padding-top:10px;font-weight:900}
   .cta{width:100%;margin-top:12px;padding:12px;border-radius:12px;border:none;color:#fff;background:linear-gradient(90deg,var(--brand1),var(--brand2));font-weight:900;cursor:pointer}
-  .muted{color:var(--muted);font-size:13px}
-  .empty{color:var(--muted);padding:8px}
+  .muted{color:#5f6b76;font-size:13px}
+  .empty{color:#5f6b76;padding:8px}
 
   /* FAB + Modal (móvil) */
   .fab{position:fixed;right:18px;bottom:18px;background:linear-gradient(90deg,var(--brand2),var(--brand3));
@@ -121,12 +124,8 @@
       <div class="card">
         <div class="site-header">
           <div class="brand">
-            <!-- usa /image para que cargue en producción -->
-            <img src="/image/logo_newchem.png" alt="NEW CHEM">
-            <div>
-              <div class="title">NEW CHEM AGROQUÍMICOS</div>
-              <div class="desc">Catálogo de productos. Selecciona presentación y cantidad; el sistema calcula los subtotales, el total en USD/Bs y valida la compra mínima.</div>
-            </div>
+            <div class="title">NEW CHEM AGROQUÍMICOS</div>
+            <div class="desc">Catálogo de productos. Selecciona presentación y cantidad; el sistema calcula los subtotales, el total en USD/Bs y valida la compra mínima.</div>
           </div>
           <div class="meta">
             <span class="pill brand">Catálogo</span>
