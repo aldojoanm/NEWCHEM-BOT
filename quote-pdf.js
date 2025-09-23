@@ -324,29 +324,45 @@ export async function renderQuotePDF(quote, outPath, company = {}){
   const wCol8      = cols[7].w;
 
   // Línea superior separadora
+   // Línea superior separadora
   doc.save();
   doc.moveTo(tableX, y).lineTo(tableX + tableW, y).strokeColor(SAFE.grid).lineWidth(0.6).stroke();
   doc.restore();
 
-  const totalRowH = 26;
+  // Altura mayor para 2 líneas
+  const totalRowH = 36;
 
   // Celda "Total"
   strokeRect(doc, tableX, y, wUntilCol6, totalRowH, SAFE.grid, 0.6);
-  doc.font('Helvetica-Bold').fillColor('#111').text('Total', tableX, y+6, { width: wUntilCol6, align: 'center' });
+  doc.font('Helvetica-Bold').fillColor('#111')
+     .text('Total', tableX, y + (totalRowH - 10) / 2, { width: wUntilCol6, align: 'center' });
 
-  // === Celda de totales UNIFICADA (una sola línea) ===
+  // === Celda de totales en DOS LÍNEAS (USD arriba, Bs abajo) ===
   const totalX = tableX + wUntilCol6;
   const totalW = wCol7 + wCol8;
 
   fillRect(doc, totalX, y, totalW, totalRowH, SAFE.totalBG);
   strokeRect(doc, totalX, y, totalW, totalRowH, SAFE.grid, 0.6);
 
-  // Texto combinado, una línea
-  const totalLine = `$ ${money(totalUSD)} — ${money(totalBs)} Bs`;
+  const padX = 8;
+  const padY = 6;
+
+  // Línea 1: USD (arriba)
   doc.font('Helvetica-Bold').fillColor('#111')
-     .text(totalLine, totalX + 8, y + 6, { width: totalW - 16, align: 'right' });
+     .text(`$ ${money(totalUSD)}`, totalX + padX, y + padY, {
+       width: totalW - padX * 2,
+       align: 'right'
+     });
+
+  // Línea 2: Bs (abajo)
+  doc.font('Helvetica-Bold').fillColor('#111')
+     .text(`Bs ${money(totalBs)}`, totalX + padX, y + padY + 14, {
+       width: totalW - padX * 2,
+       align: 'right'
+     });
 
   y += totalRowH + 16;
+
 
   // Nota precios
   ensureSpace(22);
