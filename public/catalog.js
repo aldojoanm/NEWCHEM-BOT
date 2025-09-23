@@ -33,7 +33,7 @@
 
   // estado
   let ALL  = [];    // [{nombre,categoria,variantes:[{presentacion,unidad,precio_usd,precio_bs}], imagen?}]
-  let RATE = 6.96;  // NO tocamos TC (solo mostramos lo que venga del JSON)
+  let RATE = 6.96;  // NO tocar TC: solo mostrar lo que venga del JSON
   let CART = [];    // [{nombre,presentacion,unidad,cantidad,precio_usd,precio_bs,pack}]
 
   // utils
@@ -116,7 +116,11 @@
         const v = p?.variantes?.[num(presSel.value)] || { precio_usd:0, precio_bs:0, unidad:'', presentacion:'' };
         return { p, v };
       }
-      const isAvailable = v => (num(v.precio_usd) > 0) || (num(v.precio_bs) > 0);
+
+      // 🔧 HOISTED: evitamos "Cannot access before initialization"
+      function isAvailable(v){
+        return (num(v.precio_usd) > 0) || (num(v.precio_bs) > 0);
+      }
 
       function updatePriceAndState(showToastIfUnavailable=false){
         const { v } = getData();
@@ -135,7 +139,6 @@
           toast('En estos momentos no tenemos disponible esta presentación');
         }
 
-        // hint de múltiplos
         const pack = packFromPres(v.presentacion);
         qtyEl.placeholder = pack > 1 ? `Cantidad (múltiplos de ${pack})` : 'Cantidad';
       }
@@ -153,7 +156,6 @@
         qtyEl.classList.remove('invalid');
         updatePriceAndState(false);
       });
-      // si está deshabilitado y hacen click en el área del botón, avisar
       btnWrap.addEventListener('click', (e)=>{
         if (addBtn.disabled){
           e.preventDefault();
@@ -167,7 +169,6 @@
         if (!isAvailable(v)) { toast('Este producto no está disponible en este momento'); return; }
         if (!cantidad){ qtyEl.focus(); return; }
 
-        // múltiplos por presentación
         const pack = packFromPres(v.presentacion);
         if (pack > 0 && cantidad % pack !== 0){
           qtyEl.classList.add('invalid');
@@ -242,7 +243,7 @@
       paintTotals();
     }
 
-    // modal (móvil) clona el mismo HTML para mantener alturas y evitar “bailes”
+    // modal (móvil): clonar mismo HTML para alturas iguales
     cartM.innerHTML = cartEl.innerHTML || `<div class="empty">Tu carrito está vacío.</div>`;
     totalsM.innerHTML = totalsEl.innerHTML || '';
     cartM.querySelectorAll('.rm').forEach(b=> b.addEventListener('click',()=> removeAt(+b.getAttribute('data-i'))));
@@ -257,12 +258,10 @@
       });
     });
 
-    // badge FAB
     const count = CART.reduce((a,x)=> a + (num(x.cantidad) ? 1 : 0), 0);
     cartBadge.style.display = count>0 ? 'inline-block' : 'none';
     if (count>0) cartBadge.textContent = String(count);
 
-    // CTA por mínimo
     const t = totals();
     const okMin = t.usd >= MIN_ORDER_USD;
     sendEl.disabled = !okMin || CART.length===0;
