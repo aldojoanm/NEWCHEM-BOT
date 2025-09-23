@@ -3,6 +3,7 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import multer from 'multer';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 // Routers existentes (déjalos como ya los tienes)
@@ -48,7 +49,145 @@ app.use(messengerRouter);
 app.use(waRouter);
 app.use(pricesRouter);
 
-// ========= AUTH simple para Inbox =========
+/* =======================================================================================
+ *  API DE CATÁLOGO — lee Google Sheets (CSV) y devuelve JSON (para catalog.html/catalog.js)
+ *  - Usa CATALOG_CSV_URL o (CATALOG_SHEET_ID + CATALOG_GID)
+ *  - Permite override por query ?csv=
+ *  - Tiene fallback opcional a ./knowledge/catalog.json si existe (para no caerse)
+ * ======================================================================================= */
+
+const CATALOG_CSV_URL = process.env.CATALOG_CSV_URL || '';
+const CATALOG_SHEET_ID = process.env.CATALOG_SHEET_ID || '';
+const CATALOG_GID = process.env.CATALOG_GID || '';
+
+function csvSplit(line='') {
+  const out=[]; let cur='', q=false;
+  for (let i=0;i<line.length;i++){
+    const ch=line[i];
+    if (ch === '"'){
+      if (q && line[i+1] === '"'){ cur+='"'; i++; }
+      else q = !q;
+    } else if (ch === ',' && !q){
+      out.push(cur); cur='';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseCSV(text='') {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM
+  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
+  if (!lines.length) return { head:[], rows:[] };
+  const head = csvSplit(lines.shift()).map(h => h.trim().toLowerCase());
+  const rows = lines.map(l => {
+    const c = csvSplit(l);
+    const o = {};
+    head.forEach((h,i)=> o[h] = (c[i] ?? '').trim());
+    return o;
+  });
+  return { head, rows };
+}
+
+function presentList(x){
+  return String(x || '')
+    .split(/[,|]/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeRows(rows){
+  return rows
+    .map(r => ({
+      sku: r.sku || r.SKU || '',
+      nombre: r.nombre || r.Nombre || '',
+      categoria: r.categoria || r.Categoria || '',
+      ingrediente_activo: r.ingrediente_activo || r['ingrediente activo'] || r.ia || '',
+      formulacion: r.formulacion || r.Formulacion || r['formulación'] || '',
+      dosis: r.dosis || r.Dosis || '',
+      plaga: r.plaga || r.Plaga || '',
+      presentaciones: Array.isArray(r.presentaciones)
+        ? r.presentaciones
+        : presentList(r.presentaciones || r.Presentaciones || ''),
+      imagen: r.imagen || r.Imagen || r.image || '',
+    }))
+    .filter(p => p.sku && p.nombre);
+}
+
+async function fetchCSV(url){
+  const r = await fetch(url, { cache: 'no-store' });
+  if (!r.ok) {
+    const txt = await r.text().catch(()=> '');
+    const err = new Error(`HTTP ${r.status} al obtener CSV`);
+    err.details = txt.slice(0, 500);
+    throw err;
+  }
+  return await r.text();
+}
+
+function buildCsvUrl() {
+  if (CATALOG_CSV_URL) return CATALOG_CSV_URL;
+  if (CATALOG_SHEET_ID && CATALOG_GID) {
+    // gviz CSV
+    return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(CATALOG_SHEET_ID)}/gviz/tq?tqx=out:csv&gid=${encodeURIComponent(CATALOG_GID)}`;
+  }
+  return '';
+}
+
+function loadLocalFallback(){
+  try {
+    const raw = fs.readFileSync(path.join(__dirname, 'knowledge', 'catalog.json'), 'utf8');
+    const j = JSON.parse(raw);
+    return Array.isArray(j) ? j : [];
+  } catch { return []; }
+}
+
+app.get('/api/catalog', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const override = String(req.query.csv || '').trim();
+    const url = override || buildCsvUrl();
+    if (!url) {
+      throw new Error('CATALOG_CSV_URL o (CATALOG_SHEET_ID + CATALOG_GID) no configurados');
+    }
+
+    const csv = await fetchCSV(url);
+    const { head, rows } = parseCSV(csv);
+
+    // Log suave si faltan columnas (no cortamos la respuesta)
+    const expected = ['sku','nombre','categoria','ingrediente_activo','formulacion','dosis','plaga','presentaciones','imagen'];
+    const headSet = new Set(head);
+    const missing = expected.filter(h => !headSet.has(h));
+    if (missing.length) {
+      console.warn('[catalog] columnas faltantes:', missing.join(', '));
+    }
+
+    const list = normalizeRows(rows);
+    return res.json(list);
+  } catch (e) {
+    console.error('[catalog] error:', e?.message || e, e?.details ? `\n${e.details}` : '');
+    const fallback = loadLocalFallback();
+    if (fallback.length) return res.json(fallback);
+    return res.status(500).json({ error: 'No se pudo cargar catálogo' });
+  }
+});
+
+// Helper de diagnóstico rápido (opcional)
+app.get('/api/catalog/debug', async (req, res) => {
+  try {
+    const url = String(req.query.csv || buildCsvUrl());
+    if (!url) return res.status(400).json({ error:'faltan envs o ?csv=' });
+    const csv = await fetchCSV(url);
+    const { head, rows } = parseCSV(csv);
+    res.json({ ok:true, url, head, sample: rows.slice(0, 3) });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:e.message || String(e) });
+  }
+});
+
+/* ==========================  AUTH simple para Inbox  ========================== */
 const AGENT_TOKEN = process.env.AGENT_TOKEN || '';
 function validateToken(token) {
   if (!AGENT_TOKEN) return true;       // si no configuras token, acepta cualquiera
@@ -61,7 +200,7 @@ function auth(req, res, next) {
   next();
 }
 
-// ========= SSE (EventSource) =========
+/* ===============================  SSE (EventSource)  =============================== */
 const sseClients = new Set();
 function sseBroadcast(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -84,10 +223,10 @@ app.get('/wa/agent/stream', (req, res) => {
   req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
 });
 
-// ========= Estado efímero para UI =========
+/* =======================  Estado efímero para UI / Inbox  ======================= */
 const STATE = new Map(); // id -> { human:boolean, unread:number, last?:string, name?:string }
 
-// ========= API del Inbox (Sheets Hoja 4) =========
+/* ======================  API del Inbox (Sheets Hoja 4)  ====================== */
 
 // Importar todos los chats desde Sheets (para el botón "Importar WA")
 app.post('/wa/agent/import-whatsapp', auth, async (req, res) => {
@@ -147,9 +286,6 @@ app.get('/wa/agent/convos', auth, async (_req, res) => {
     res.status(500).json({ error: 'no se pudo leer Hoja 4' });
   }
 });
-
-
-
 
 // Historial por chat
 app.get('/wa/agent/history/:id', auth, async (req, res) => {
@@ -252,5 +388,7 @@ app.listen(PORT, () => {
   console.log('   • WhatsApp:         GET/POST /wa/webhook');
   console.log('   • Inbox UI:         GET       /inbox');
   console.log('   • Inbox API:        /wa/agent/* (convos, history, send, read, handoff, send-media, import-whatsapp, stream)');
+  console.log('   • Prices JSON:      GET       /api/prices');
+  console.log('   • Catalog JSON:     GET       /api/catalog   (?csv=override)');
   console.log('   • Health:           GET       /healthz');
 });
