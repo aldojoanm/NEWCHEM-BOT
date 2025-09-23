@@ -25,7 +25,7 @@
   fab.addEventListener('click', ()=> modal.classList.add('show'));
 
   const toastEl = $('#toast');
-  function toast(msg, ms=3000){
+  function toast(msg, ms=1300){
     toastEl.textContent = msg || 'Acción realizada';
     toastEl.classList.add('show');
     setTimeout(()=> toastEl.classList.remove('show'), ms);
@@ -45,10 +45,10 @@
   };
   const fmt2 = n => (Number(n)||0).toFixed(2);
   const packFromPres = pres => {
+    // extrae 200 de "200L", 25 de "25KG", 1 de "1KG", 10 de "10L" (entero)
     const m = String(pres||'').match(/(\d+(?:\.\d+)?)/);
     return m ? Number(m[1]) : 1;
   };
-  const guessImagePath = name => `/image/${String(name||'').replace(/\s+/g,'').toUpperCase()}.png`;
 
   /* ===================== UI: secciones ===================== */
   function renderSections(){
@@ -68,6 +68,10 @@
       </div>`).join('');
 
     bindCards();
+  }
+
+  function guessImagePath(name){
+    return `/image/${String(name||'').replace(/\s+/g,'').toUpperCase()}.png`;
   }
 
   function renderCard(item){
@@ -108,18 +112,21 @@
       const btnWrap = row.querySelector('.btn-wrap');
       const name    = row.getAttribute('data-name');
 
-      // selecciona automát. la primera presentación disponible (>0)
+      // selecciona automáticamente la primera presentación disponible (>0)
       selectFirstAvailable();
 
-      function getData(){
+      function currentVar(){
         const p = ALL.find(x=>x.nombre===name);
         const v = p?.variantes?.[num(presSel.value)] || { precio_usd:0, precio_bs:0, unidad:'', presentacion:'' };
         return { p, v };
       }
-      const isAvailable = v => (num(v.precio_usd) > 0) || (num(v.precio_bs) > 0);
+
+      function isAvailable(v){
+        return (num(v.precio_usd) > 0) || (num(v.precio_bs) > 0);
+      }
 
       function updatePriceAndState(showToastIfUnavailable=false){
-        const { v } = getData();
+        const { v } = currentVar();
         const usd = num(v.precio_usd);
         const bs  = num(v.precio_bs) || +(usd * RATE).toFixed(2);
 
@@ -131,10 +138,11 @@
 
         const available = isAvailable(v);
         addBtn.disabled = !available;
-        if (!available && showToastIfUnavailable){
-          toast('En estos momentos no tenemos disponible esta presentación');
+        if (!available && showToastIfUnavailable) {
+          toast('En estos momentos no tenemos disponible esta presentación', 3000);
         }
 
+        // Validación de múltiplos: muestra pista
         const pack = packFromPres(v.presentacion);
         qtyEl.placeholder = pack > 1 ? `Cantidad (múltiplos de ${pack})` : 'Cantidad';
       }
@@ -143,7 +151,9 @@
         const p = ALL.find(x=>x.nombre===name);
         if (!p || !Array.isArray(p.variantes)) return;
         const idxOk = p.variantes.findIndex(v => isAvailable(v));
-        if (idxOk >= 0) presSel.value = String(idxOk);
+        if (idxOk >= 0) {
+          presSel.value = String(idxOk);
+        } // si ninguna disponible, queda la 0 (botón se deshabilita)
         updatePriceAndState(false);
       }
 
@@ -152,23 +162,29 @@
         qtyEl.classList.remove('invalid');
         updatePriceAndState(false);
       });
+      // Si el botón está deshabilitado y hacen click en el área del botón, mostrar aviso
       btnWrap.addEventListener('click', (e)=>{
         if (addBtn.disabled){
           e.preventDefault();
-          toast('Este producto no está disponible en este momento');
+          toast('Este producto no está disponible en este momento', 3000);
         }
       });
 
       addBtn.addEventListener('click', ()=>{
-        const { p, v } = getData();
+        const { p, v } = currentVar();
         const cantidad = num(qtyEl.value);
-        if (!isAvailable(v)) { toast('Este producto no está disponible en este momento'); return; }
+        const available = isAvailable(v);
+        if (!available){
+          toast('Este producto no está disponible en este momento', 3000);
+          return;
+        }
         if (!cantidad){ qtyEl.focus(); return; }
 
+        // Validación de múltiplos por presentación
         const pack = packFromPres(v.presentacion);
         if (pack > 0 && cantidad % pack !== 0){
           qtyEl.classList.add('invalid');
-          toast(`La cantidad debe ser múltiplo de ${pack}`);
+          toast(`La cantidad debe ser múltiplo de ${pack}`, 3000);
           return;
         }
 
@@ -184,7 +200,7 @@
 
         qtyEl.value = '';
         updateCart();
-        toast('Se añadió a tu carrito', 1300);
+        toast('Se añadió a tu carrito');
       });
     });
   }
@@ -199,10 +215,12 @@
     CART.splice(i,1);
     updateCart();
   }
-  const totals = () => ({
-    usd: CART.reduce((a,x)=> a + x.precio_usd * x.cantidad, 0),
-    bs : CART.reduce((a,x)=> a + x.precio_bs  * x.cantidad, 0)
-  });
+
+  function totals(){
+    const usd = CART.reduce((a,x)=> a + x.precio_usd * x.cantidad, 0);
+    const bs  = CART.reduce((a,x)=> a + x.precio_bs  * x.cantidad, 0);
+    return { usd, bs };
+  }
 
   function updateCart(){
     if (!CART.length){
@@ -215,7 +233,7 @@
         return `
           <div class="item">
             <div>
-              <strong>${esc(it.nombre)}</strong> ${it.presentacion?`<span class="pill">${esc(it.presentacion)}</span>`:''}
+              <div><strong>${esc(it.nombre)}</strong> ${it.presentacion?`<span class="pill">${esc(it.presentacion)}</span>`:''}</div>
               <div class="muted">US$ ${fmt2(it.precio_usd)} · Bs ${fmt2(it.precio_bs)} ${it.unidad?`/ ${esc(it.unidad)}`:''}</div>
             </div>
             <div><input class="qcart" data-i="${i}" value="${esc(it.cantidad)}" inputmode="decimal"></div>
@@ -230,16 +248,23 @@
           const i = +inp.getAttribute('data-i');
           const v = num(inp.value);
           CART[i].cantidad = v;
+
+          // Validación de múltiplos en el carrito también
           const pack = CART[i].pack || packFromPres(CART[i].presentacion);
-          if (pack > 0 && v % pack !== 0){ inp.classList.add('invalid'); } else { inp.classList.remove('invalid'); }
-          paintTotals();
+          if (pack > 0 && v % pack !== 0){
+            inp.classList.add('invalid');
+          }else{
+            inp.classList.remove('invalid');
+          }
+          updateCart();
         });
       });
 
-      paintTotals();
+      const t = totals();
+      totalsEl.innerHTML = `Total: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)}<br><span class="muted">TC ${fmt2(RATE)}</span>`;
     }
 
-    // modal (móvil): clona contenido para mantener el mismo layout y alturas
+    // modal (móvil)
     cartM.innerHTML = cartEl.innerHTML || `<div class="empty">Tu carrito está vacío.</div>`;
     totalsM.innerHTML = totalsEl.innerHTML || '';
     cartM.querySelectorAll('.rm').forEach(b=> b.addEventListener('click',()=> removeAt(+b.getAttribute('data-i'))));
@@ -256,19 +281,14 @@
 
     // badge en FAB
     const count = CART.reduce((a,x)=> a + (num(x.cantidad) ? 1 : 0), 0);
-    cartBadge.style.display = count>0 ? 'inline-block' : 'none';
-    if (count>0) cartBadge.textContent = String(count);
+    if (count > 0){ cartBadge.style.display = 'inline-block'; cartBadge.textContent = String(count); }
+    else { cartBadge.style.display = 'none'; }
 
     // habilitar / deshabilitar CTA por mínimo
     const t = totals();
     const okMin = t.usd >= MIN_ORDER_USD;
     sendEl.disabled = !okMin || CART.length===0;
     sendM.disabled  = !okMin || CART.length===0;
-  }
-
-  function paintTotals(){
-    const t = totals();
-    totalsEl.innerHTML = `Total: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)}<br><span class="muted">TC ${fmt2(RATE)}</span>`;
   }
 
   /* ===================== WhatsApp ===================== */
@@ -289,41 +309,24 @@
 
   function trySend(){
     const t = totals();
-    if (t.usd < MIN_ORDER_USD){ toast('La compra mínima es de US$ 3.000'); return; }
+    if (t.usd < MIN_ORDER_USD){
+      toast('La compra mínima es de US$ 3.000', 3000);
+      return;
+    }
     const txt = buildWaText();
     if (WA_NUMBER) window.location.href = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(txt)}`;
     else           window.location.href = `https://wa.me/?text=${encodeURIComponent(txt)}`;
   }
+
   sendEl.addEventListener('click', trySend);
   sendM.addEventListener('click', trySend);
-
-  /* ===================== Rate refresher (TC) ===================== */
-  async function refreshRate(){
-    try{
-      const r = await fetch(JSON_URL, { cache:'no-store' });
-      if(!r.ok) return;
-      const { rate } = await r.json();
-      if (typeof rate === 'number' && rate !== RATE){
-        RATE = rate;
-        tcEl.textContent = `TC ${fmt2(RATE)}`;
-        // actualizar subtotales visibles
-        updateCart();
-        // refrescar los textos de precio/unidad actuales
-        secEl.querySelectorAll('.prod').forEach(row=>{
-          const presSel = row.querySelector('.pres');
-          const evt = new Event('change'); presSel.dispatchEvent(evt);
-        });
-      } else {
-        tcEl.textContent = `TC ${fmt2(RATE)}`;
-      }
-    }catch{}
-  }
 
   /* ===================== Init ===================== */
   (async function init(){
     try{
       const r = await fetch(JSON_URL, { cache: 'no-store' });
       if(!r.ok) throw new Error('HTTP '+r.status);
+      // IMPORTANTE: RATE se toma del backend (H1 de la hoja). Ya era variable; solo lo mostramos en la UI.
       const { items=[], rate=6.96 } = await r.json();
 
       // normaliza items al formato con variantes
@@ -343,9 +346,6 @@
 
       renderSections();
       updateCart();
-
-      // refresco del TC cada 60s (y ajusta textos si cambia)
-      setInterval(refreshRate, 60000);
     }catch(e){
       console.error(e);
       secEl.innerHTML = `<div class="empty">Error al cargar catálogo.</div>`;
