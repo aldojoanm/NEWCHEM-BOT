@@ -280,7 +280,7 @@ async function replyHumanChat(psid){
 
 async function replyAdInfo(psid){
   await sendText(psid,
-    '¡Claro! Somos New Chem. Ofrecemos agroquímicos (herbicidas, insecticidas y fungicidas) de alta eficacia. ' +
+    '¡Claro! *Somos New Chem Agroquímicos*. Ofrecemos agroquímicos (herbicidas, insecticidas y fungicidas) de alta eficacia. ' +
     'La compra mínima es *US$ 3.000* y la entrega se realiza en nuestro almacén de Santa Cruz. ' +
     'Puedo ayudarte con una cotización, si me ayudas con unos datos rápidos.'
   );
