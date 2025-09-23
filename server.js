@@ -3,7 +3,6 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import multer from 'multer';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 // Routers existentes (déjalos como ya los tienes)
@@ -49,145 +48,66 @@ app.use(messengerRouter);
 app.use(waRouter);
 app.use(pricesRouter);
 
-/* =======================================================================================
- *  API DE CATÁLOGO — lee Google Sheets (CSV) y devuelve JSON (para catalog.html/catalog.js)
- *  - Usa CATALOG_CSV_URL o (CATALOG_SHEET_ID + CATALOG_GID)
- *  - Permite override por query ?csv=
- *  - Tiene fallback opcional a ./knowledge/catalog.json si existe (para no caerse)
- * ======================================================================================= */
-
-const CATALOG_CSV_URL = process.env.CATALOG_CSV_URL || '';
-const CATALOG_SHEET_ID = process.env.CATALOG_SHEET_ID || '';
-const CATALOG_GID = process.env.CATALOG_GID || '';
-
-function csvSplit(line='') {
-  const out=[]; let cur='', q=false;
-  for (let i=0;i<line.length;i++){
-    const ch=line[i];
-    if (ch === '"'){
-      if (q && line[i+1] === '"'){ cur+='"'; i++; }
-      else q = !q;
-    } else if (ch === ',' && !q){
-      out.push(cur); cur='';
-    } else {
-      cur += ch;
-    }
-  }
-  out.push(cur);
-  return out;
-}
-
-function parseCSV(text='') {
-  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1); // BOM
-  const lines = text.split(/\r?\n/).filter(l => l.trim().length);
-  if (!lines.length) return { head:[], rows:[] };
-  const head = csvSplit(lines.shift()).map(h => h.trim().toLowerCase());
-  const rows = lines.map(l => {
-    const c = csvSplit(l);
-    const o = {};
-    head.forEach((h,i)=> o[h] = (c[i] ?? '').trim());
-    return o;
-  });
-  return { head, rows };
-}
-
-function presentList(x){
-  return String(x || '')
-    .split(/[,|]/)
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-
-function normalizeRows(rows){
-  return rows
-    .map(r => ({
-      sku: r.sku || r.SKU || '',
-      nombre: r.nombre || r.Nombre || '',
-      categoria: r.categoria || r.Categoria || '',
-      ingrediente_activo: r.ingrediente_activo || r['ingrediente activo'] || r.ia || '',
-      formulacion: r.formulacion || r.Formulacion || r['formulación'] || '',
-      dosis: r.dosis || r.Dosis || '',
-      plaga: r.plaga || r.Plaga || '',
-      presentaciones: Array.isArray(r.presentaciones)
-        ? r.presentaciones
-        : presentList(r.presentaciones || r.Presentaciones || ''),
-      imagen: r.imagen || r.Imagen || r.image || '',
-    }))
-    .filter(p => p.sku && p.nombre);
-}
-
-async function fetchCSV(url){
-  const r = await fetch(url, { cache: 'no-store' });
-  if (!r.ok) {
-    const txt = await r.text().catch(()=> '');
-    const err = new Error(`HTTP ${r.status} al obtener CSV`);
-    err.details = txt.slice(0, 500);
-    throw err;
-  }
-  return await r.text();
-}
-
-function buildCsvUrl() {
-  if (CATALOG_CSV_URL) return CATALOG_CSV_URL;
-  if (CATALOG_SHEET_ID && CATALOG_GID) {
-    // gviz CSV
-    return `https://docs.google.com/spreadsheets/d/${encodeURIComponent(CATALOG_SHEET_ID)}/gviz/tq?tqx=out:csv&gid=${encodeURIComponent(CATALOG_GID)}`;
-  }
-  return '';
-}
-
-function loadLocalFallback(){
+/* =============================
+   NUEVO: /api/catalog
+   Fuente: Hoja PRECIOS (readPrices)
+   - Agrupa por "producto" (del sku "Producto-Presentación")
+   - Junta todas las presentaciones de cada producto
+   - Devuelve campos mínimos para el front del carrito
+   ============================= */
+app.get('/api/catalog', async (_req, res) => {
   try {
-    const raw = fs.readFileSync(path.join(__dirname, 'knowledge', 'catalog.json'), 'utf8');
-    const j = JSON.parse(raw);
-    return Array.isArray(j) ? j : [];
-  } catch { return []; }
-}
+    const { prices = [] } = await readPrices(); // ya funciona en tu app
+    // Agrupar
+    const byProduct = new Map();
+    for (const p of prices) {
+      const sku = String(p.sku || '');
+      // sku esperado: "Producto-Presentación" (de tu prices.js/html)
+      let producto = sku;
+      let presentacion = '';
+      if (sku.includes('-')) {
+        const parts = sku.split('-');
+        producto = parts.shift() || '';
+        presentacion = parts.join('-') || '';
+      }
 
-app.get('/api/catalog', async (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  try {
-    const override = String(req.query.csv || '').trim();
-    const url = override || buildCsvUrl();
-    if (!url) {
-      throw new Error('CATALOG_CSV_URL o (CATALOG_SHEET_ID + CATALOG_GID) no configurados');
+      const key = producto.trim();
+      if (!key) continue;
+
+      const cur = byProduct.get(key) || {
+        skuBase: key,
+        nombre: key,
+        categoria: String(p.categoria || '').trim() || 'Herbicida',
+        presentaciones: new Set(),
+      };
+      if (presentacion) cur.presentaciones.add(presentacion.trim());
+      byProduct.set(key, cur);
     }
 
-    const csv = await fetchCSV(url);
-    const { head, rows } = parseCSV(csv);
+    const items = [...byProduct.values()].map(x => ({
+      sku: x.skuBase, // base
+      nombre: x.nombre,
+      categoria: x.categoria,
+      presentaciones: [...x.presentaciones],
+      // campos opcionales para compatibilidad
+      ingrediente_activo: '',
+      formulacion: '',
+      dosis: '',
+      plaga: [],
+      imagen: ''
+    }));
 
-    // Log suave si faltan columnas (no cortamos la respuesta)
-    const expected = ['sku','nombre','categoria','ingrediente_activo','formulacion','dosis','plaga','presentaciones','imagen'];
-    const headSet = new Set(head);
-    const missing = expected.filter(h => !headSet.has(h));
-    if (missing.length) {
-      console.warn('[catalog] columnas faltantes:', missing.join(', '));
-    }
+    // Orden alfabético por defecto
+    items.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
 
-    const list = normalizeRows(rows);
-    return res.json(list);
+    res.json({ ok:true, items, count: items.length, source: 'prices' });
   } catch (e) {
-    console.error('[catalog] error:', e?.message || e, e?.details ? `\n${e.details}` : '');
-    const fallback = loadLocalFallback();
-    if (fallback.length) return res.json(fallback);
-    return res.status(500).json({ error: 'No se pudo cargar catálogo' });
+    console.error('[catalog] from prices error:', e);
+    res.status(500).json({ ok:false, error: 'catalog_unavailable' });
   }
 });
 
-// Helper de diagnóstico rápido (opcional)
-app.get('/api/catalog/debug', async (req, res) => {
-  try {
-    const url = String(req.query.csv || buildCsvUrl());
-    if (!url) return res.status(400).json({ error:'faltan envs o ?csv=' });
-    const csv = await fetchCSV(url);
-    const { head, rows } = parseCSV(csv);
-    res.json({ ok:true, url, head, sample: rows.slice(0, 3) });
-  } catch (e) {
-    res.status(500).json({ ok:false, error:e.message || String(e) });
-  }
-});
-
-/* ==========================  AUTH simple para Inbox  ========================== */
+// ========= AUTH simple para Inbox =========
 const AGENT_TOKEN = process.env.AGENT_TOKEN || '';
 function validateToken(token) {
   if (!AGENT_TOKEN) return true;       // si no configuras token, acepta cualquiera
@@ -200,7 +120,7 @@ function auth(req, res, next) {
   next();
 }
 
-/* ===============================  SSE (EventSource)  =============================== */
+// ========= SSE (EventSource) =========
 const sseClients = new Set();
 function sseBroadcast(event, data) {
   const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -223,16 +143,14 @@ app.get('/wa/agent/stream', (req, res) => {
   req.on('close', () => { clearInterval(ping); sseClients.delete(res); });
 });
 
-/* =======================  Estado efímero para UI / Inbox  ======================= */
+// ========= Estado efímero para UI =========
 const STATE = new Map(); // id -> { human:boolean, unread:number, last?:string, name?:string }
 
-/* ======================  API del Inbox (Sheets Hoja 4)  ====================== */
-
-// Importar todos los chats desde Sheets (para el botón "Importar WA")
+// ========= API del Inbox (Sheets Hoja 4) =========
 app.post('/wa/agent/import-whatsapp', auth, async (req, res) => {
   try {
-    const days = Number(req.body?.days || 3650);       // ~10 años
-    const items = await summariesLastNDays(days);      // [{ id, name, last, lastTs }]
+    const days = Number(req.body?.days || 3650);
+    const items = await summariesLastNDays(days);
     for (const it of items) {
       const st = STATE.get(it.id) || { human:false, unread:0 };
       STATE.set(it.id, { ...st, name: it.name || it.id, last: it.last || '' });
@@ -244,13 +162,9 @@ app.post('/wa/agent/import-whatsapp', auth, async (req, res) => {
   }
 });
 
-// Lista de conversaciones (une Sheets + STATE)
 app.get('/wa/agent/convos', auth, async (_req, res) => {
   try {
-    // 1) Trae de Sheets (hasta ~10 años)
-    const items = await summariesLastNDays(3650); // [{ id, name, last, lastTs }]
-
-    // 2) Indexa por id lo que vino de Sheets
+    const items = await summariesLastNDays(3650);
     const byId = new Map();
     for (const it of items) {
       byId.set(it.id, {
@@ -262,8 +176,6 @@ app.get('/wa/agent/convos', auth, async (_req, res) => {
         unread: 0,
       });
     }
-
-    // 3) Mezcla con STATE (lo importado queda visible aunque Sheets no responda)
     for (const [id, st] of STATE.entries()) {
       const cur = byId.get(id) || { id, name: id, last: '', lastTs: 0, human: false, unread: 0 };
       byId.set(id, {
@@ -274,12 +186,9 @@ app.get('/wa/agent/convos', auth, async (_req, res) => {
         unread: st.unread || 0,
       });
     }
-
-    // 4) Ordena por último ts (si lo hay) y devuelve sin lastTs
     const convos = [...byId.values()]
       .sort((a, b) => (b.lastTs || 0) - (a.lastTs || 0))
       .map(({ lastTs, ...rest }) => rest);
-
     res.json({ convos });
   } catch (e) {
     console.error('[convos]', e);
@@ -287,19 +196,15 @@ app.get('/wa/agent/convos', auth, async (_req, res) => {
   }
 });
 
-// Historial por chat
 app.get('/wa/agent/history/:id', auth, async (req, res) => {
   const id = String(req.params.id || '');
   try {
     const rows = await historyForIdLastNDays(id, 3650);
     const memory = rows.map(r => ({ role:r.role, content:r.content, ts:r.ts }));
     const name = STATE.get(id)?.name || rows[rows.length-1]?.name || id;
-
-    // actualizar estado efímero para UI
     const last = memory[memory.length-1]?.content || '';
     const st = STATE.get(id) || { human:false, unread:0 };
     STATE.set(id, { ...st, last, name, unread:0 });
-
     res.json({ id, name, human: !!st.human, memory });
   } catch (e) {
     console.error('[history]', e);
@@ -307,7 +212,6 @@ app.get('/wa/agent/history/:id', auth, async (req, res) => {
   }
 });
 
-// Enviar texto (agente) -> guarda en Hoja 4 y emite SSE
 app.post('/wa/agent/send', auth, async (req, res) => {
   const { to, text } = req.body || {};
   if (!to || !text) return res.status(400).json({ error: 'to y text requeridos' });
@@ -327,7 +231,6 @@ app.post('/wa/agent/send', auth, async (req, res) => {
   }
 });
 
-// Marcar leído
 app.post('/wa/agent/read', auth, (req, res) => {
   const id = String(req.body?.to || '');
   if (!id) return res.status(400).json({ error:'to requerido' });
@@ -336,7 +239,6 @@ app.post('/wa/agent/read', auth, (req, res) => {
   res.json({ ok:true });
 });
 
-// Tomar/soltar humano
 app.post('/wa/agent/handoff', auth, (req, res) => {
   const id = String(req.body?.to || '');
   const mode = String(req.body?.mode || '');
@@ -346,7 +248,6 @@ app.post('/wa/agent/handoff', auth, (req, res) => {
   res.json({ ok:true });
 });
 
-// Enviar media (log en Hoja 4 para que quede trazabilidad)
 const upload = multer({ storage: multer.memoryStorage() });
 app.post('/wa/agent/send-media', auth, upload.array('files'), async (req, res) => {
   const { to, caption = '' } = req.body || {};
@@ -389,6 +290,6 @@ app.listen(PORT, () => {
   console.log('   • Inbox UI:         GET       /inbox');
   console.log('   • Inbox API:        /wa/agent/* (convos, history, send, read, handoff, send-media, import-whatsapp, stream)');
   console.log('   • Prices JSON:      GET       /api/prices');
-  console.log('   • Catalog JSON:     GET       /api/catalog   (?csv=override)');
+  console.log('   • Catalog JSON:     GET       /api/catalog   (desde Hoja PRECIOS)');
   console.log('   • Health:           GET       /healthz');
 });
