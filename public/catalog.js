@@ -25,16 +25,16 @@
   fab.addEventListener('click', ()=> modal.classList.add('show'));
 
   const toastEl = $('#toast');
-  function toast(msg){
+  function toast(msg, ms=1300){
     toastEl.textContent = msg || 'Acción realizada';
     toastEl.classList.add('show');
-    setTimeout(()=> toastEl.classList.remove('show'), 1300);
+    setTimeout(()=> toastEl.classList.remove('show'), ms);
   }
 
   // estado
   let ALL  = [];    // [{nombre,categoria,variantes:[{presentacion,unidad,precio_usd,precio_bs}], imagen?}]
   let RATE = 6.96;
-  let CART = [];    // [{nombre,presentacion,unidad,cantidad,precio_usd,precio_bs}]
+  let CART = [];    // [{nombre,presentacion,unidad,cantidad,precio_usd,precio_bs,pack}]
 
   // utils
   const esc  = s => String(s ?? '').replace(/[&<>"]/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]));
@@ -44,33 +44,33 @@
     return m ? Number(m[0]) : 0;
   };
   const fmt2 = n => (Number(n)||0).toFixed(2);
+  const packFromPres = pres => {
+    // extrae 200 de "200L", 25 de "25KG", 1 de "1KG", 10 de "10L" (entero)
+    const m = String(pres||'').match(/(\d+(?:\.\d+)?)/);
+    return m ? Number(m[1]) : 1;
+  };
 
   /* ===================== UI: secciones ===================== */
   function renderSections(){
-    // agrupar por categoría
     const cats = {};
     for (const it of ALL){
       const k = String(it.categoria||'').trim() || 'SIN CATEGORÍA';
       (cats[k] ||= []).push(it);
     }
-    // ordenar por nombre
     Object.values(cats).forEach(arr => arr.sort((a,b)=>a.nombre.localeCompare(b.nombre,'es')));
 
-    secEl.innerHTML = Object.entries(cats).map(([cat, items])=>{
-      return `
-        <div class="section-block">
-          <div class="section-title"><span class="dot"></span>${esc(cat)}</div>
-          <div class="list">
-            ${items.map(renderCard).join('')}
-          </div>
-        </div>`;
-    }).join('');
+    secEl.innerHTML = Object.entries(cats).map(([cat, items])=>`
+      <div class="section-block">
+        <div class="section-title"><span class="dot"></span>${esc(cat)}</div>
+        <div class="list">
+          ${items.map(renderCard).join('')}
+        </div>
+      </div>`).join('');
 
     bindCards();
   }
 
   function guessImagePath(name){
-    // intenta /image/DRIER.png, etc.
     return `/image/${String(name||'').replace(/\s+/g,'').toUpperCase()}.png`;
   }
 
@@ -82,7 +82,8 @@
       `<option value="${i}" data-usd="${vx.precio_usd}" data-bs="${vx.precio_bs}" data-un="${esc(vx.unidad)}">${esc(vx.presentacion||'')}</option>`
     ).join('') || `<option value="">—</option>`;
 
-    const bs = first.precio_bs || +(first.precio_usd * RATE).toFixed(2);
+    const usd0 = num(first.precio_usd);
+    const bs0  = num(first.precio_bs) || +(usd0 * RATE).toFixed(2);
     const imgSrc = item.imagen || guessImagePath(item.nombre);
 
     return `
@@ -92,7 +93,7 @@
           <div class="cat"><span class="tag">${esc(item.categoria||'')}</span></div>
         </div>
         <div class="img"><img src="${esc(imgSrc)}" alt="${esc(item.nombre)}" onerror="this.src='/image/placeholder.png'"></div>
-        <div class="price-note">Precio unidad: <strong>US$ ${fmt2(first.precio_usd)}</strong> · <strong>Bs ${fmt2(bs)}</strong></div>
+        <div class="price-note">Precio unidad: <strong>US$ ${fmt2(usd0)}</strong> · <strong>Bs ${fmt2(bs0)}</strong></div>
         <div class="pres-wrap"><select class="pres">${opts}</select></div>
         <div class="qty-wrap">
           <input class="qty" placeholder="Cantidad" inputmode="decimal">
@@ -108,7 +109,11 @@
       const qtyEl   = row.querySelector('.qty');
       const subtEl  = row.querySelector('.subt');
       const addBtn  = row.querySelector('.add');
+      const btnWrap = row.querySelector('.btn-wrap');
       const name    = row.getAttribute('data-name');
+
+      // selecciona automáticamente la primera presentación disponible (>0)
+      selectFirstAvailable();
 
       function currentVar(){
         const p = ALL.find(x=>x.nombre===name);
@@ -116,43 +121,81 @@
         return { p, v };
       }
 
-      function updatePriceAndState(){
-        const { v } = currentVar();
-        const usd = v.precio_usd || 0;
-        const bs  = v.precio_bs || +(usd * RATE).toFixed(2);
-        // subtotal con cantidad
-        const qn = num(qtyEl.value);
-        subtEl.textContent = `US$ ${fmt2(usd*qn)} · Bs ${fmt2(bs*qn)}`;
-        // nota de precio
-        const pn = row.querySelector('.price-note');
-        pn.innerHTML = `Precio unidad: <strong>US$ ${fmt2(usd)}</strong> · <strong>Bs ${fmt2(bs)}</strong>`;
-        // disponibilidad
-        const available = usd > 0 || bs > 0;
-        addBtn.disabled = !available;
+      function isAvailable(v){
+        return (num(v.precio_usd) > 0) || (num(v.precio_bs) > 0);
       }
 
-      presSel.addEventListener('change', updatePriceAndState);
-      qtyEl.addEventListener('input', updatePriceAndState);
-      updatePriceAndState();
+      function updatePriceAndState(showToastIfUnavailable=false){
+        const { v } = currentVar();
+        const usd = num(v.precio_usd);
+        const bs  = num(v.precio_bs) || +(usd * RATE).toFixed(2);
+
+        const qn = num(qtyEl.value);
+        subtEl.textContent = `US$ ${fmt2(usd*qn)} · Bs ${fmt2(bs*qn)}`;
+
+        const pn = row.querySelector('.price-note');
+        pn.innerHTML = `Precio unidad: <strong>US$ ${fmt2(usd)}</strong> · <strong>Bs ${fmt2(bs)}</strong>`;
+
+        const available = isAvailable(v);
+        addBtn.disabled = !available;
+        if (!available && showToastIfUnavailable) {
+          toast('En estos momentos no tenemos disponible esta presentación', 3000);
+        }
+
+        // Validación de múltiplos: muestra pista
+        const pack = packFromPres(v.presentacion);
+        qtyEl.placeholder = pack > 1 ? `Cantidad (múltiplos de ${pack})` : 'Cantidad';
+      }
+
+      function selectFirstAvailable(){
+        const p = ALL.find(x=>x.nombre===name);
+        if (!p || !Array.isArray(p.variantes)) return;
+        const idxOk = p.variantes.findIndex(v => isAvailable(v));
+        if (idxOk >= 0) {
+          presSel.value = String(idxOk);
+        } // si ninguna disponible, queda la 0 (botón se deshabilita)
+        updatePriceAndState(false);
+      }
+
+      presSel.addEventListener('change', ()=> updatePriceAndState(true));
+      qtyEl.addEventListener('input', ()=>{
+        qtyEl.classList.remove('invalid');
+        updatePriceAndState(false);
+      });
+      // Si el botón está deshabilitado y hacen click en el área del botón, mostrar aviso
+      btnWrap.addEventListener('click', (e)=>{
+        if (addBtn.disabled){
+          e.preventDefault();
+          toast('Este producto no está disponible en este momento', 3000);
+        }
+      });
 
       addBtn.addEventListener('click', ()=>{
         const { p, v } = currentVar();
         const cantidad = num(qtyEl.value);
-        const available = (v.precio_usd || 0) > 0 || (v.precio_bs || 0) > 0;
-
+        const available = isAvailable(v);
         if (!available){
-          alert('Este producto no está disponible en este momento.');
+          toast('Este producto no está disponible en este momento', 3000);
           return;
         }
         if (!cantidad){ qtyEl.focus(); return; }
+
+        // Validación de múltiplos por presentación
+        const pack = packFromPres(v.presentacion);
+        if (pack > 0 && cantidad % pack !== 0){
+          qtyEl.classList.add('invalid');
+          toast(`La cantidad debe ser múltiplo de ${pack}`, 3000);
+          return;
+        }
 
         upsertCart({
           nombre: p.nombre,
           presentacion: v.presentacion || '',
           unidad: v.unidad || '',
           cantidad,
-          precio_usd: v.precio_usd || 0,
-          precio_bs:  v.precio_bs  || +( (v.precio_usd||0) * RATE ).toFixed(2)
+          precio_usd: num(v.precio_usd) || 0,
+          precio_bs:  num(v.precio_bs)  || +((num(v.precio_usd)||0) * RATE).toFixed(2),
+          pack
         });
 
         qtyEl.value = '';
@@ -180,7 +223,6 @@
   }
 
   function updateCart(){
-    // panel derecho (desktop)
     if (!CART.length){
       cartEl.innerHTML = `<div class="empty">Tu carrito está vacío.</div>`;
       totalsEl.innerHTML = '';
@@ -204,7 +246,16 @@
       cartEl.querySelectorAll('.qcart').forEach(inp=>{
         inp.addEventListener('input', ()=>{
           const i = +inp.getAttribute('data-i');
-          CART[i].cantidad = num(inp.value);
+          const v = num(inp.value);
+          CART[i].cantidad = v;
+
+          // Validación de múltiplos en el carrito también
+          const pack = CART[i].pack || packFromPres(CART[i].presentacion);
+          if (pack > 0 && v % pack !== 0){
+            inp.classList.add('invalid');
+          }else{
+            inp.classList.remove('invalid');
+          }
           updateCart();
         });
       });
@@ -216,24 +267,22 @@
     // modal (móvil)
     cartM.innerHTML = cartEl.innerHTML || `<div class="empty">Tu carrito está vacío.</div>`;
     totalsM.innerHTML = totalsEl.innerHTML || '';
-    // los inputs del modal deben re-enlazar
     cartM.querySelectorAll('.rm').forEach(b=> b.addEventListener('click',()=> removeAt(+b.getAttribute('data-i'))));
     cartM.querySelectorAll('.qcart').forEach(inp=>{
       inp.addEventListener('input', ()=>{
         const i = +inp.getAttribute('data-i');
-        CART[i].cantidad = num(inp.value);
+        const v = num(inp.value);
+        CART[i].cantidad = v;
+        const pack = CART[i].pack || packFromPres(CART[i].presentacion);
+        if (pack > 0 && v % pack !== 0){ inp.classList.add('invalid'); } else { inp.classList.remove('invalid'); }
         updateCart();
       });
     });
 
     // badge en FAB
     const count = CART.reduce((a,x)=> a + (num(x.cantidad) ? 1 : 0), 0);
-    if (count > 0){
-      cartBadge.style.display = 'inline-block';
-      cartBadge.textContent = String(count);
-    } else {
-      cartBadge.style.display = 'none';
-    }
+    if (count > 0){ cartBadge.style.display = 'inline-block'; cartBadge.textContent = String(count); }
+    else { cartBadge.style.display = 'none'; }
 
     // habilitar / deshabilitar CTA por mínimo
     const t = totals();
@@ -261,7 +310,7 @@
   function trySend(){
     const t = totals();
     if (t.usd < MIN_ORDER_USD){
-      alert('La compra mínima es de US$ 3.000.');
+      toast('La compra mínima es de US$ 3.000', 3000);
       return;
     }
     const txt = buildWaText();
@@ -277,34 +326,19 @@
     try{
       const r = await fetch(JSON_URL, { cache: 'no-store' });
       if(!r.ok) throw new Error('HTTP '+r.status);
+      // IMPORTANTE: RATE se toma del backend (H1 de la hoja). Ya era variable; solo lo mostramos en la UI.
       const { items=[], rate=6.96 } = await r.json();
 
-      // Adaptar datos del API /api/catalog -> tarjetas (con variantes por presentación)
-      // items esperado: [{ nombre, categoria, presentaciones:[...], unidad, precio_usd, precio_bs, imagen? }]
-      // Si ya viene con {variantes:[]}, lo respetamos.
+      // normaliza items al formato con variantes
       ALL = items.map(it=>{
         if (Array.isArray(it.variantes)) return it;
-        // convertir del formato plano sku -> variantes
-        const presentaciones = it.presentaciones || it.presentacion || it.pres || [];
-        const v = Array.isArray(presentaciones) && presentaciones.length
-          ? presentaciones.map(p => ({
-              presentacion: p,
-              unidad: it.unidad || '',
-              precio_usd: num(it.precio_usd),
-              precio_bs : num(it.precio_bs)
-            }))
-          : [{
-              presentacion: it.presentacion || '',
-              unidad: it.unidad || '',
-              precio_usd: num(it.precio_usd),
-              precio_bs : num(it.precio_bs)
-            }];
-        return {
-          nombre: it.nombre || it.sku || '',
-          categoria: it.categoria || it.tipo || '',
-          variantes: v,
-          imagen: it.imagen
-        };
+        const v = [{
+          presentacion: it.presentacion || it.pres || '',
+          unidad: it.unidad || '',
+          precio_usd: num(it.precio_usd),
+          precio_bs : num(it.precio_bs)
+        }];
+        return { nombre: it.nombre || it.sku || '', categoria: it.categoria || it.tipo || '', variantes: v, imagen: it.imagen };
       });
 
       RATE = Number(rate) || 6.96;
