@@ -287,27 +287,34 @@ async function replyAdInfo(psid){
 }
 
 async function fetchFBProfileName(psid){
-  try{
-    // IMPORTANTE: no pidas 'name' aquí. Solo first_name/last_name.
-    const url = `https://graph.facebook.com/v20.0/${psid}?fields=first_name,last_name,profile_pic&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
-    const r = await httpFetchAny(url, { method:'GET' });
+  const urlBase = `https://graph.facebook.com/v20.0/${psid}`;
+  const qs = `fields=first_name,last_name,name,profile_pic&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
 
+  async function tryOnce() {
+    const r = await httpFetchAny(`${urlBase}?${qs}`, { method:'GET' });
     if (!r.ok) {
-      console.error('FB profile fetch failed:', r.status, await r.text());
+      const t = await r.text().catch(()=> '');
+      console.error('FB profile fetch failed:', r.status, t);
       return null;
     }
-
     const j = await r.json();
+
+    // Preferimos first/last, pero si sólo viene "name", úsalo.
     const fn = (j.first_name || '').trim();
     const ln = (j.last_name  || '').trim();
-    const raw = [fn, ln].filter(Boolean).join(' ');
-    if (!raw) return null;
+    let raw = [fn, ln].filter(Boolean).join(' ').trim();
+    if (!raw && j.name) raw = String(j.name).trim();
 
-    return title(raw).slice(0,80);
-  } catch (e) {
-    console.error('FB profile fetch error:', e);
-    return null;
+    if (!raw) return null;
+    // Normalizamos: Título y hasta 80 chars.
+    return title(raw).slice(0, 80);
   }
+
+  // Pequeño retry por si el primer hit viene vacío (latencia/propagación)
+  const first = await tryOnce();
+  if (first) return first;
+  await new Promise(res => setTimeout(res, 300)); // 300ms backoff
+  return await tryOnce();
 }
 
 
@@ -327,13 +334,21 @@ async function askName(psid){
   await sendText(psid, 'Antes de continuar, ¿Cuál es tu nombre completo? ✍️');
 }
 async function askDepartamento(psid){
-  const s=getSession(psid);
-  if (s.pending!=='departamento') s.pending='departamento';
-  if (!shouldPrompt(s,'askDepartamento')) return;
+  const s = getSession(psid);
+  if (s.pending !== 'departamento') s.pending = 'departamento';
+  if (!shouldPrompt(s, 'askDepartamento')) return;
+
+  // Asegura nombre aquí también (por si este flujo vino sin ensure previo)
+  if (!s.profileName) {
+    const n = await ensureProfileName(psid);
+    if (n) s.profileName = n;
+  }
+
   const nombre = s.profileName ? `${s.profileName}. 😊\n` : '';
-  await sendQR(psid,
+  await sendQR(
+    psid,
     `${nombre}📍 Cuéntanos, ¿desde qué *departamento* de Bolivia nos escribes?, \n Selecciona tu *departamento*:`,
-    DEPARTAMENTOS.map(d => ({title:d, payload:`DPTO_${d.toUpperCase().replace(/\s+/g,'_')}`}))
+    DEPARTAMENTOS.map(d => ({ title: d, payload: `DPTO_${d.toUpperCase().replace(/\s+/g,'_')}` }))
   );
 }
 

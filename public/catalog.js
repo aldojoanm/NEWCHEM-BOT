@@ -34,9 +34,9 @@
   }
 
   // estado
-  let ALL  = [];    // [{nombre,categoria,variantes:[{presentacion,unidad,precio_usd,precio_bs}], imagen?}]
-  let RATE = 6.96;  // NO tocar TC: solo mostramos lo que venga del backend
-  let CART = [];    // [{nombre,presentacion,unidad,cantidad,precio_usd,precio_bs,pack}]
+  let ALL  = [];
+  let RATE = 6.96;
+  let CART = [];
 
   // utils
   const esc  = s => String(s ?? '').replace(/[&<>"]/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]));
