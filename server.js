@@ -48,62 +48,54 @@ app.use(messengerRouter);
 app.use(waRouter);
 app.use(pricesRouter);
 
-/* =============================
-   NUEVO: /api/catalog
-   Fuente: Hoja PRECIOS (readPrices)
-   - Agrupa por "producto" (del sku "Producto-Presentación")
-   - Junta todas las presentaciones de cada producto
-   - Devuelve campos mínimos para el front del carrito
-   ============================= */
+
 app.get('/api/catalog', async (_req, res) => {
   try {
-    const { prices = [] } = await readPrices(); // ya funciona en tu app
-    // Agrupar
+    const { prices = [], rate = 6.96 } = await readPrices();
+
+    // Agrupar por PRODUCTO (a partir de sku = "PRODUCTO-PRESENTACION")
     const byProduct = new Map();
     for (const p of prices) {
-      const sku = String(p.sku || '');
-      // sku esperado: "Producto-Presentación" (de tu prices.js/html)
-      let producto = sku;
-      let presentacion = '';
+      const sku = String(p.sku || '').trim();
+      let producto = sku, presentacion = '';
       if (sku.includes('-')) {
         const parts = sku.split('-');
-        producto = parts.shift() || '';
-        presentacion = parts.join('-') || '';
+        producto = (parts.shift() || '').trim();
+        presentacion = parts.join('-').trim();
       }
+      if (!producto) continue;
 
-      const key = producto.trim();
-      if (!key) continue;
+      // normaliza precios
+      const usd = Number(p.precio_usd || 0);
+      const bs  = Number(p.precio_bs  || 0) || (usd ? +(usd * rate).toFixed(2) : 0);
+      const unidad = String(p.unidad || '').trim();
+      const categoria = String(p.categoria || '').trim() || 'Herbicidas';
 
-      const cur = byProduct.get(key) || {
-        skuBase: key,
-        nombre: key,
-        categoria: String(p.categoria || '').trim() || 'Herbicida',
-        presentaciones: new Set(),
+      const cur = byProduct.get(producto) || {
+        nombre: producto,
+        categoria,
+        imagen: `/image/${producto}.png`,
+        variantes: []
       };
-      if (presentacion) cur.presentaciones.add(presentacion.trim());
-      byProduct.set(key, cur);
+      cur.categoria = cur.categoria || categoria;
+      if (presentacion || unidad || usd || bs) {
+        cur.variantes.push({
+          presentacion: presentacion || '',
+          unidad,
+          precio_usd: usd,
+          precio_bs: bs
+        });
+      }
+      byProduct.set(producto, cur);
     }
 
-    const items = [...byProduct.values()].map(x => ({
-      sku: x.skuBase, // base
-      nombre: x.nombre,
-      categoria: x.categoria,
-      presentaciones: [...x.presentaciones],
-      // campos opcionales para compatibilidad
-      ingrediente_activo: '',
-      formulacion: '',
-      dosis: '',
-      plaga: [],
-      imagen: ''
-    }));
+    const items = [...byProduct.values()]
+      .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
 
-    // Orden alfabético por defecto
-    items.sort((a,b) => a.nombre.localeCompare(b.nombre, 'es'));
-
-    res.json({ ok:true, items, count: items.length, source: 'prices' });
+    res.json({ ok:true, rate, items, count: items.length, source:'sheet:PRECIOS' });
   } catch (e) {
     console.error('[catalog] from prices error:', e);
-    res.status(500).json({ ok:false, error: 'catalog_unavailable' });
+    res.status(500).json({ ok:false, error:'catalog_unavailable' });
   }
 });
 

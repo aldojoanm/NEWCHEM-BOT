@@ -9,30 +9,34 @@
   :root{ --bg:#0b141a; --panel:#111b21; --ring:#233138; --txt:#e9edef; --muted:#9bb0ba; --accent:#00a884; }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.45 system-ui,Segoe UI,Roboto}
-  .wrap{max-width:1200px;margin:28px auto;padding:0 16px}
-  .grid{display:grid;grid-template-columns:1fr 320px;gap:18px}
-  .left{}
+  .wrap{max-width:1280px;margin:28px auto;padding:0 16px}
+  .grid{display:grid;grid-template-columns:1fr 360px;gap:18px}
   .right{position:sticky; top:18px; height:fit-content}
   .card{background:#101a21;border:1px solid var(--ring);border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
   .header{display:flex;gap:10px;align-items:center;padding:14px 16px;border-bottom:1px solid var(--ring)}
   .title{font-weight:800}
   .search{flex:1}
   .search input,.select select{width:100%;padding:10px 12px;background:#0f1820;border:1px solid var(--ring);border-radius:10px;color:var(--txt);outline:none}
-  .toolbar{display:flex;gap:10px;padding:10px 16px;border-bottom:1px solid var(--ring)}
-  .list{padding:8px 12px}
-  .prod{display:grid;grid-template-columns:1fr 220px 120px 110px;gap:10px;align-items:center;padding:10px;border-bottom:1px dashed #15222a}
-  .name{font-weight:700}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--ring)}
+  .list{padding:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+  @media (max-width:880px){ .grid{grid-template-columns:1fr} .list{grid-template-columns:1fr} }
+  .prod{display:grid;grid-template-columns:96px 1fr 210px 120px 118px;gap:10px;align-items:center;padding:12px;border:1px solid var(--ring);border-radius:12px;background:#0f1820}
+  .prod img{width:96px;height:96px;object-fit:contain;background:#0b141a;border:1px solid #1b2a31;border-radius:10px}
+  .name{font-weight:800}
   .pill{color:var(--muted);font-size:12px}
-  .prod select,.prod input{width:100%;padding:8px 10px;background:#0f1820;border:1px solid var(--ring);border-radius:10px;color:var(--txt)}
-  .btn{background:var(--accent);border:none;color:#022d26;padding:10px 12px;border-radius:10px;font-weight:700;cursor:pointer}
-  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .price{font-weight:700}
+  .sub{color:var(--muted);font-size:12px}
+  .prod select,.prod input{width:100%;padding:8px 10px;background:#0b141a;border:1px solid var(--ring);border-radius:10px;color:var(--txt)}
+  .btn{background:var(--accent);border:none;color:#022d26;padding:10px 12px;border-radius:10px;font-weight:800;cursor:pointer}
+  .btn:disabled{opacity:.45;cursor:not-allowed}
   .empty{padding:16px;color:var(--muted)}
-  .cart{padding:12px 14px}
+  .cart{padding:14px}
   .cart h3{margin:0 0 8px 0}
-  .item{display:grid;grid-template-columns:1fr 70px 26px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--ring)}
+  .item{display:grid;grid-template-columns:1fr 84px 120px 28px;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--ring)}
   .rm{background:transparent;border:1px solid #2b3b43;border-radius:8px;color:#86a3ad;cursor:pointer}
-  .note{color:var(--muted);font-size:12px;margin-top:8px}
-  .cta{width:100%;margin-top:10px}
+  .cta{width:100%;margin-top:12px}
+  .totals{margin-top:10px;border-top:1px solid var(--ring);padding-top:10px;font-weight:800}
+  .muted{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -46,6 +50,7 @@
         </div>
         <div class="toolbar">
           <div class="select" style="min-width:260px"><select id="cat"><option value="">Todas las categorías</option></select></div>
+          <div class="muted" id="tc"></div>
         </div>
         <div id="list" class="list"></div>
       </div>
@@ -56,8 +61,9 @@
         <div class="cart">
           <h3>Tu selección</h3>
           <div id="cart"></div>
+          <div class="totals" id="totals"></div>
           <button id="send" class="btn cta">Enviar por WhatsApp</button>
-          <div class="note">Compra mínima: US$ 3.000. Puedes combinar productos.</div>
+          <div class="muted" style="margin-top:6px">Compra mínima: US$ 3.000. Puedes combinar productos.</div>
         </div>
       </div>
     </div>
