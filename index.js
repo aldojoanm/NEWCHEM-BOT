@@ -280,25 +280,36 @@ async function replyHumanChat(psid){
 
 async function replyAdInfo(psid){
   await sendText(psid,
-    '¡Claro! Somos New Chem. Ofrecemos **agroquímicos** (herbicidas, insecticidas y fungicidas) de alta eficacia. ' +
-    'La compra mínima es **US$ 3.000** y la entrega se realiza en nuestro **almacén de Santa Cruz**. ' +
-    'Puedo ayudarte con **precios, disponibilidad y dosis** según tu zona.'
+    '¡Claro! Somos New Chem. Ofrecemos agroquímicos (herbicidas, insecticidas y fungicidas) de alta eficacia. ' +
+    'La compra mínima es *US$ 3.000* y la entrega se realiza en nuestro almacén de Santa Cruz. ' +
+    'Puedo ayudarte con una cotización, si me ayudas con unos datos rápidos.'
   );
 }
 
-// ===== Perfil de FB: traer nombre por PSID =====
 async function fetchFBProfileName(psid){
   try{
-    const url = `https://graph.facebook.com/v20.0/${psid}?fields=name,first_name,last_name&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
+    // IMPORTANTE: no pidas 'name' aquí. Solo first_name/last_name.
+    const url = `https://graph.facebook.com/v20.0/${psid}?fields=first_name,last_name,profile_pic&access_token=${encodeURIComponent(PAGE_ACCESS_TOKEN)}`;
     const r = await httpFetchAny(url, { method:'GET' });
-    if(!r.ok) return null;
+
+    if (!r.ok) {
+      console.error('FB profile fetch failed:', r.status, await r.text());
+      return null;
+    }
+
     const j = await r.json();
-    const raw = (j.name || [j.first_name, j.last_name].filter(Boolean).join(' ')).trim();
-    if(!raw) return null;
-    // Normaliza/capitaliza y limita tamaño
+    const fn = (j.first_name || '').trim();
+    const ln = (j.last_name  || '').trim();
+    const raw = [fn, ln].filter(Boolean).join(' ');
+    if (!raw) return null;
+
     return title(raw).slice(0,80);
-  }catch{ return null; }
+  } catch (e) {
+    console.error('FB profile fetch error:', e);
+    return null;
+  }
 }
+
 
 async function ensureProfileName(psid){
   const s = getSession(psid);
@@ -382,6 +393,7 @@ function whatsappLinkFromSession(s){
 
   return `https://wa.me/${WA_SELLER_NUMBER}?text=${encodeURIComponent(txt)}`;
 }
+
 
 async function finishAndWhatsApp(psid){
   const s=getSession(psid);
@@ -479,8 +491,8 @@ async function handleOpeningIntent(psid, text){
     s.vars.productIntent = prod.nombre;
     s.vars.intent = asksPrice(text) ? 'quote' : 'product';
     await sendText(psid,
-      `¡Excelente! Sobre *${prod.nombre}* puedo ayudarte con **precios, disponibilidad y dosis**. ` +
-      `Para enviarte una **cotización sin compromiso**, primero te ubico con unos datos rápidos.`
+      `¡Excelente! Sobre *${prod.nombre}* puedo ayudarte con una cotización. ` +
+      `Para enviarte una cotización sin compromiso, podrias ayudarme con unos datos rápidos.`
     );
     await ensureProfileName(psid);
     await askDepartamento(psid);
