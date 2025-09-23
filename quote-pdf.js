@@ -330,7 +330,7 @@ export async function renderQuotePDF(quote, outPath, company = {}){
   doc.restore();
 
   // Altura mayor para 2 líneas
-  const totalRowH = 36;
+  const totalRowH = 28;
 
   // Celda "Total"
   strokeRect(doc, tableX, y, wUntilCol6, totalRowH, SAFE.grid, 0.6);
@@ -345,7 +345,7 @@ export async function renderQuotePDF(quote, outPath, company = {}){
   strokeRect(doc, totalX, y, totalW, totalRowH, SAFE.grid, 0.6);
 
   const padX = 8;
-  const padY = 6;
+  const padY = 4;
 
   // Línea 1: USD (arriba)
   doc.font('Helvetica-Bold').fillColor('#111')
@@ -356,12 +356,12 @@ export async function renderQuotePDF(quote, outPath, company = {}){
 
   // Línea 2: Bs (abajo)
   doc.font('Helvetica-Bold').fillColor('#111')
-     .text(`Bs ${money(totalBs)}`, totalX + padX, y + padY + 14, {
+     .text(`Bs ${money(totalBs)}`, totalX + padX, y + padY + 11, {
        width: totalW - padX * 2,
        align: 'right'
      });
 
-  y += totalRowH + 16;
+  y += totalRowH + 14;
 
 
   // Nota precios
