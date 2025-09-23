@@ -49,53 +49,82 @@ app.use(waRouter);
 app.use(pricesRouter);
 
 
+// /api/catalog robusto (reemplaza tu handler actual)
 app.get('/api/catalog', async (_req, res) => {
   try {
-    const { prices = [], rate = 6.96 } = await readPrices();
+    // 1) Intentamos leer precios + TC desde sheets
+    let rate = 6.96;
+    let prices = [];
+    try {
+      const r = await readPrices();         // tu función de sheets.js
+      if (r && typeof r.rate === 'number') rate = r.rate;
+      if (Array.isArray(r?.prices)) prices = r.prices;
+    } catch (e) {
+      // fallback: si tienes readRate, úsalo
+      try { rate = await readRate(); } catch {}
+    }
 
-    // Agrupar por PRODUCTO (a partir de sku = "PRODUCTO-PRESENTACION")
-    const byProduct = new Map();
-    for (const p of prices) {
-      const sku = String(p.sku || '').trim();
-      let producto = sku, presentacion = '';
-      if (sku.includes('-')) {
+    // 2) Normalizamos filas al mismo shape
+    //    Acepta:
+    //    - { TIPO, PRODUCTO, PRESENTACION, UNIDAD, 'PRECIO (USD)', 'PRECIO (BS)' }
+    //    - { categoria, producto, presentacion, unidad, precio_usd, precio_bs }
+    //    - { sku, unidad, categoria, precio_usd, precio_bs }
+    const normRows = [];
+    for (const row of prices) {
+      if (!row) continue;
+
+      let categoria = String(row.TIPO ?? row.categoria ?? '').trim();
+      let producto  = String(row.PRODUCTO ?? row.producto ?? '').trim();
+      let present   = String(row.PRESENTACION ?? row.presentacion ?? '').trim();
+      let unidad    = String(row.UNIDAD ?? row.unidad ?? '').trim();
+
+      // Si viene sku = "PRODUCTO-PRESENTACION"
+      if (!producto && row.sku) {
+        const sku = String(row.sku).trim();
         const parts = sku.split('-');
         producto = (parts.shift() || '').trim();
-        presentacion = parts.join('-').trim();
+        present  = parts.join('-').trim();
       }
-      if (!producto) continue;
 
-      // normaliza precios
-      const usd = Number(p.precio_usd || 0);
-      const bs  = Number(p.precio_bs  || 0) || (usd ? +(usd * rate).toFixed(2) : 0);
-      const unidad = String(p.unidad || '').trim();
-      const categoria = String(p.categoria || '').trim() || 'Herbicidas';
+      // Precios
+      let usd = Number(row['PRECIO (USD)'] ?? row.precio_usd ?? 0);
+      let bs  = Number(row['PRECIO (BS)']  ?? row.precio_bs  ?? 0);
+      if (!bs && usd) bs = +(usd * rate).toFixed(2);
 
-      const cur = byProduct.get(producto) || {
-        nombre: producto,
-        categoria,
-        imagen: `/image/${producto}.png`,
+      if (!producto) continue; // no podemos agrupar sin producto
+
+      normRows.push({ categoria, producto, present, unidad, usd, bs });
+    }
+
+    // 3) Agrupar por producto => variantes
+    const byProduct = new Map();
+    for (const r of normRows) {
+      const cur = byProduct.get(r.producto) || {
+        nombre: r.producto,
+        categoria: r.categoria || 'Herbicidas',
+        imagen: `/image/${r.producto}.png`,
         variantes: []
       };
-      cur.categoria = cur.categoria || categoria;
-      if (presentacion || unidad || usd || bs) {
+      if (r.present || r.unidad || r.usd || r.bs) {
         cur.variantes.push({
-          presentacion: presentacion || '',
-          unidad,
-          precio_usd: usd,
-          precio_bs: bs
+          presentacion: r.present || '',
+          unidad: r.unidad || '',
+          precio_usd: Number(r.usd || 0),
+          precio_bs : Number(r.bs  || 0)
         });
       }
-      byProduct.set(producto, cur);
+      // conserva la primera categoría no vacía
+      if (!cur.categoria && r.categoria) cur.categoria = r.categoria;
+      byProduct.set(r.producto, cur);
     }
 
     const items = [...byProduct.values()]
       .sort((a,b)=>a.nombre.localeCompare(b.nombre,'es'));
 
-    res.json({ ok:true, rate, items, count: items.length, source:'sheet:PRECIOS' });
+    return res.json({ ok:true, rate, items, count: items.length, source:'sheet:PRECIOS' });
   } catch (e) {
-    console.error('[catalog] from prices error:', e);
-    res.status(500).json({ ok:false, error:'catalog_unavailable' });
+    console.error('[catalog] error:', e);
+    return res.status(500).json({ ok:false, error:'catalog_unavailable' });
   }
 });
 
