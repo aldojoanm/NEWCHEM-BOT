@@ -67,16 +67,19 @@
             border:1px solid rgba(91,103,174,.25);padding:4px 8px;border-radius:999px;font-size:12px;font-weight:700}
   .price-note{color:var(--muted);font-size:14px;margin-top:4px}
 
-  .prod select,.prod input{width:100%;padding:12px;background:#fff;border:1px solid var(--ring);border-radius:12px;color:var(--text);outline:none}
+  .prod select,.prod input{width:100%;padding:12px;background:#fff;border:1px solid var(--ring);border-radius:12px;color:#000;outline:none}
   .prod input.invalid{border-color:#e76a6a;box-shadow:0 0 0 3px rgba(231,106,106,.15)}
   .sub{color:var(--muted);font-size:12px;margin-top:6px}
   .btn{width:100%;background:linear-gradient(90deg,var(--brand2),var(--brand3));border:none;color:#fff;padding:12px;border-radius:12px;font-weight:900;cursor:pointer}
   .btn:disabled{opacity:.45;cursor:not-allowed}
 
-  /* Carrito (panel derecho). Estable/lineal en móvil al duplicar el mismo HTML. */
+  /* Carrito (panel derecho) */
   .cart{padding:16px}
   .cart h3{margin:0 0 10px;font-size:18px}
-  .item{display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--ring)}
+  .item{
+    display:grid;grid-template-columns:1fr 90px 140px 28px;gap:10px;align-items:center;
+    padding:10px 0;border-bottom:1px solid var(--ring)
+  }
   .item > div:first-child{min-width:0}
   .item > div:first-child strong{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .item input{width:100%;padding:8px 10px;border:1px solid var(--ring);border-radius:10px}
@@ -99,6 +102,10 @@
   .sheet{position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:min(640px,92vw);max-height:80vh;overflow:auto;background:#fff;border-radius:18px 18px 0 0;box-shadow:var(--shadow);padding:16px}
   .sheet h3{margin:0 0 8px}
   .sheet .close{position:absolute;right:12px;top:10px;border:1px solid var(--ring);background:#fff;border-radius:10px;padding:6px 10px;cursor:pointer}
+
+  /* En el modal el nombre NO se corta (sale completo) */
+  .sheet .item > div:first-child strong{white-space:normal;overflow:visible;text-overflow:unset}
+
   @media (min-width:1025px){ .fab{display:none} .modal{display:none !important} }
 
   /* Toast */
