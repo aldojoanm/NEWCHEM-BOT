@@ -1,8 +1,8 @@
 (function(){
   const MIN_ORDER_USD = 3000;
 
-  // Enviar SIEMPRE a este número
-  const WA_NUMBER = '59162239865';
+  const WA_NUMBER = (document.documentElement.getAttribute('data-wa-number') || '59162239865')
+  .replace(/\D/g,'');
 
   const root      = document.documentElement;
   const JSON_URL  = root.getAttribute('data-json-url') || '/api/catalog';
@@ -288,17 +288,14 @@ function buildWaText() {
     return `* ${it.nombre}${pres} — ${cant}${unidad}${subTxt}`;
   });
 
-  const t = totals(); 
+  const t = totals();
   return [
-    'CARRITO NEW CHEM',
+    'CART_V1 NEWCHEM',
     ...lines,
     `TOTAL_USD: ${fmt2(t.usd)}`,
     `TOTAL_BS: ${fmt2(t.bs)}`
-    // (sin TC)
   ].join('\n');
 }
-
-
 
   function trySend(){
     const t = totals();
