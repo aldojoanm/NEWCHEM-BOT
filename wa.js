@@ -329,24 +329,29 @@ const parseHectareas = text=>{
   return only ? only[1].replace(',','.') : null;
 };
 function looksLikeCatalogCart(text=''){
-  return /^CARRITO NEW CHEM\b/i.test(text) || /^\*\s.+\s—\s[\d.,]+\s*[A-Za-z]*/m.test(text);
+  return (
+    /^CARRITO NEW CHEM\b/i.test(text) ||
+    /^\*\s.+\s—\s[\d.,]+\s*[A-Za-z]*(?:\s—\s(?:SUBTOTAL:?\s*)?\$?\s*[\d.,]+)?/m.test(text)
+  );
 }
 
 function parseCatalogCart(text=''){
   const items = [];
   const lines = text.split('\n').map(l=>l.trim());
+  const re = /^\*\s(.+?)(?:\s\((.+?)\))?\s—\s([\d.,]+)\s*([A-Za-z]+)?(?:\s—\s(?:SUBTOTAL:?\s*)?\$?\s*([\d.,]+))?$/;
   for (const line of lines){
-    const m = line.match(/^\*\s(.+?)(?:\s\((.+?)\))?\s—\s([\d.,]+)\s*([A-Za-z]+)?$/);
+    const m = line.match(re);
     if (!m) continue;
-    const nombre = m[1].trim();
-    const presentacion = (m[2]||'').trim();
-    const cantidadNum = (m[3]||'').replace(',','.').trim();
-    const unidad = (m[4]||'').trim();
-    const cantidad = `${cantidadNum}${unidad ? ' '+unidad : ''}`; 
-    items.push({ nombre, presentacion, cantidad });
+    const nombre        = m[1].trim();
+    const presentacion  = (m[2]||'').trim();
+    const cantidadNum   = (m[3]||'').replace(',','.').trim();
+    const unidad        = (m[4]||'').trim();
+    const subUsdRaw     = (m[5]||'').replace(',','.').trim();
+    const cantidad      = `${cantidadNum}${unidad ? ' '+unidad : ''}`;
+    const subtotal_usd  = subUsdRaw ? Number(subUsdRaw) : undefined;
+    items.push({ nombre, presentacion, cantidad, subtotal_usd });
   }
-  return items;
-}
+ return items;
 
 const parsePhone = text=>{
   const m = String(text).match(/(\+?\d[\d\s\-]{6,17}\d)/);
@@ -446,7 +451,8 @@ function summaryText(s){
   if ((s.vars.cart||[]).length){
     linesProductos = s.vars.cart.map(it=>{
       const pres = it.presentacion ? ` (${it.presentacion})` : '';
-      return `* ${it.nombre}${pres} — ${it.cantidad}`;
+      const sub  = (it.subtotal_usd!=null) ? ` — SUBTOTAL: $${Number(it.subtotal_usd).toFixed(2)}` : '';
+      return `* ${it.nombre}${pres} — ${it.cantidad}${sub}`;
     });
   } else {
     const p = s.vars.last_product || 'ND';
@@ -856,6 +862,7 @@ const processed = new Map();
 const PROCESSED_TTL = 5 * 60 * 1000;
 setInterval(()=>{ const now=Date.now(); for(const [k,ts] of processed){ if(now-ts>PROCESSED_TTL) processed.delete(k); } }, 60*1000);
 function seenWamid(id){ if(!id) return false; const now=Date.now(); const old=processed.get(id); processed.set(id,now); return !!old && (now-old)<PROCESSED_TTL; }
+}
 
 router.post('/wa/webhook', async (req,res)=>{
 
@@ -1216,11 +1223,12 @@ if (looksLikeCatalogCart(text)){
     S(fromId).vars.cart = items;
     persistS(fromId);
 
-    // Muestra el resumen con tu formato actual
+ await toText(fromId, '✅ Recibí tu carrito. Te paso el resumen:');
     await toText(fromId, summaryText(S(fromId)));
-    // Ofrece finalizar (enviar PDF) o seguir agregando datos
-    await toButtons(fromId, '¿Deseas finalizar y recibir tu cotización formal?', [
-      { title:'Finalizar', payload:'QR_FINALIZAR' }
+    await toButtons(fromId, '¿Cómo seguimos?', [
+      { title:'Cotizar ahora',    payload:'QR_FINALIZAR' },
+      { title:'Seguir agregando', payload:'OPEN_CATALOG' }
+      // (si quieres otro más, p.ej. "Hablar con asesor", añade: { title:'Hablar con asesor', payload:'QR_HUMANO' })
     ]);
     res.sendStatus(200); 
     return;
@@ -1338,8 +1346,6 @@ if (looksLikeCatalogCart(text)){
         res.sendStatus(200); 
         return;
       }
-      if(wantsAnother(text)){ await askAddMore(fromId); res.sendStatus(200); return; }
-
       const ha   = parseHectareas(text); if(ha && !S(fromId).vars.hectareas){ S(fromId).vars.hectareas = ha; persistS(fromId); }
       const phone= parsePhone(text);     if(phone){ S(fromId).vars.phone = phone; persistS(fromId); }
       const depTyped = detectDepartamento(text);

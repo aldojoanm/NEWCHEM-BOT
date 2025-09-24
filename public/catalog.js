@@ -275,22 +275,29 @@
     totalsEl.innerHTML = `Total: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)}<br><span class="muted">TC ${fmt2(RATE)}</span>`;
   }
 
-  /* ===================== WhatsApp ===================== */
-  function buildWaText(){
+
+function buildWaText() {
   const lines = CART.map(it => {
-    const cant = fmt2(it.cantidad);
+    const cant   = fmt2(it.cantidad);
     const unidad = it.unidad ? ` ${it.unidad}` : '';
-    return `* ${it.nombre}${it.presentacion?` (${it.presentacion})`:''} — ${cant}${unidad}`;
+    const pres   = it.presentacion ? ` (${it.presentacion})` : '';
+    const subtotal = (it.subtotal_usd != null)
+      ? Number(it.subtotal_usd)
+      : (it.precio_usd != null ? Number(it.precio_usd) * Number(it.cantidad || 0) : null);
+    const subTxt = (subtotal != null) ? ` — SUBTOTAL: $${fmt2(subtotal)}` : '';
+    return `* ${it.nombre}${pres} — ${cant}${unidad}${subTxt}`;
   });
-  const t = totals();
+
+  const t = totals(); 
   return [
     'CARRITO NEW CHEM',
     ...lines,
     `TOTAL_USD: ${fmt2(t.usd)}`,
-    `TOTAL_BS: ${fmt2(t.bs)}`,
-    `TC: ${fmt2(RATE)}`
+    `TOTAL_BS: ${fmt2(t.bs)}`
+    // (sin TC)
   ].join('\n');
 }
+
 
 
   function trySend(){
