@@ -277,19 +277,21 @@
 
   /* ===================== WhatsApp ===================== */
   function buildWaText(){
-    const lines = CART.map(it => {
-      const subU = it.precio_usd * it.cantidad;
-      const subB = it.precio_bs  * it.cantidad;
-      return `• ${it.nombre}${it.presentacion?` (${it.presentacion})`:''} — ${fmt2(it.cantidad)} ${it.unidad || ''}\n  Precio: US$ ${fmt2(it.precio_usd)} · Bs ${fmt2(it.precio_bs)}  |  Subt.: US$ ${fmt2(subU)} · Bs ${fmt2(subB)}`;
-    });
-    const t = totals();
-    return [
-      `Hola, quiero cotizar los siguientes productos de NEW CHEM AGROQUÍMICOS:`,
-      ...lines,
-      ``,
-      `TOTAL: US$ ${fmt2(t.usd)} · Bs ${fmt2(t.bs)} (TC ${fmt2(RATE)})`
-    ].join('\n');
-  }
+  const lines = CART.map(it => {
+    const cant = fmt2(it.cantidad);
+    const unidad = it.unidad ? ` ${it.unidad}` : '';
+    return `* ${it.nombre}${it.presentacion?` (${it.presentacion})`:''} — ${cant}${unidad}`;
+  });
+  const t = totals();
+  return [
+    'CARRITO NEW CHEM',
+    ...lines,
+    `TOTAL_USD: ${fmt2(t.usd)}`,
+    `TOTAL_BS: ${fmt2(t.bs)}`,
+    `TC: ${fmt2(RATE)}`
+  ].join('\n');
+}
+
 
   function trySend(){
     const t = totals();
