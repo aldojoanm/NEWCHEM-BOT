@@ -774,16 +774,6 @@ async function nextStep(to){
       await toCatalogButton(to, 'Perfecto. Ya tengo tus datos. Abre el catálogo y arma tu *carrito* para cotizar:');
       return;
     }
-
-    // (9) Cantidad
-    if(!s.vars.cantidad){
-      if (!s.asked.cantidad){
-        s.pending='cantidad'; await markPrompt(s,'cantidad'); s.asked.cantidad=true;
-        persistS(to); // ★
-        return toText(to,'Para poder realizar tu cotización, ¿qué *cantidad* necesitas *(L/KG o unidades)*?');
-      }
-      return;
-    }
   } finally {
     persistS(to); 
     busy.delete(to);
