@@ -2,8 +2,10 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'fs';
 import path from 'path';
-import { appendFromSession, parseAndAppendClientResponse, appendChatHistoryRow, purgeOldChatHistory, getClientByPhone, upsertClientByPhone} from './sheets.js';
+import { appendFromSession, parseAndAppendClientResponse } from './sheets.js';
+import { appendChatHistoryRow, purgeOldChatHistory } from './sheets.js'; // ← NUEVO (Hoja 4)
 import { sendAutoQuotePDF } from './quote.js';
+import { getClientByPhone, upsertClientByPhone } from './sheets.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -17,10 +19,13 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }
 });
 
+
+
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || 'VERIFY_123';
 const WA_TOKEN        = process.env.WHATSAPP_TOKEN || '';
 const WA_PHONE_ID     = process.env.WHATSAPP_PHONE_ID || '';
-const CATALOG_URL     = process.env.CATALOG_URL || 'https://newchem-bot-production.up.railway.app/catalog.html';
+const CATALOG_URL     = process.env.CATALOG_URL || 'https://tinyurl.com/f4euhvzk';
+const PRICE_LIST_URL = process.env.PRICE_LIST_URL || 'https://tinyurl.com/z8yxwcn9';
 const STORE_LAT       = process.env.STORE_LAT || '-17.7580406';
 const STORE_LNG       = process.env.STORE_LNG || '-63.1532503';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -82,6 +87,11 @@ const FAQS    = loadJSON('./knowledge/faqs.json');
 // ===== CONSTANTES =====
 const DEPARTAMENTOS = ['Santa Cruz','Cochabamba','La Paz','Chuquisaca','Tarija','Oruro','Potosí','Beni','Pando'];
 const SUBZONAS_SCZ  = ['Norte','Este','Sur','Valles','Chiquitania'];
+const CAT_QR = [
+  { title: 'Herbicida',   payload: 'CAT_HERBICIDA' },
+  { title: 'Insecticida', payload: 'CAT_INSECTICIDA' },
+  { title: 'Fungicida',   payload: 'CAT_FUNGICIDA' }
+];
 const CROP_OPTIONS = [
   { title:'Soya',     payload:'CROP_SOYA'     },
   { title:'Maíz',     payload:'CROP_MAIZ'     },
@@ -426,28 +436,6 @@ const parseHectareas = text=>{
   const only = String(text).match(/^\s*(\d{1,6}(?:[.,]\d{1,2})?)\s*$/);
   return only ? only[1].replace(',','.') : null;
 };
-function looksLikeCatalogCart(text=''){
-  // Detecta nuestro nuevo formato (ver cambio en catalog.js)
-  // Encabezado simple y líneas normalizadas con "* Nombre (Presentación) — Cantidad Unidad"
-  return /^CARRITO NEW CHEM\b/i.test(text) || /^\*\s.+\s—\s[\d.,]+\s*[A-Za-z]*/m.test(text);
-}
-
-function parseCatalogCart(text=''){
-  const items = [];
-  const lines = text.split('\n').map(l=>l.trim());
-  for (const line of lines){
-    const m = line.match(/^\*\s(.+?)(?:\s\((.+?)\))?\s—\s([\d.,]+)\s*([A-Za-z]+)?$/);
-    if (!m) continue;
-    const nombre = m[1].trim();
-    const presentacion = (m[2]||'').trim();
-    const cantidadNum = (m[3]||'').replace(',','.').trim();
-    const unidad = (m[4]||'').trim();
-    const cantidad = `${cantidadNum}${unidad ? ' '+unidad : ''}`; 
-    items.push({ nombre, presentacion, cantidad });
-  }
-  return items;
-}
-
 const parsePhone = text=>{
   const m = String(text).match(/(\+?\d[\d\s\-]{6,17}\d)/);
   return m ? m[1].replace(/[^\d+]/g,'') : null;
@@ -585,7 +573,6 @@ function summaryText(s){
     ...linesProductos,
     '*Compra mínima: US$ 3.000 (puedes combinar productos).',
     '*La entrega de tu pedido se realiza en nuestro almacén*.'
-
   ].join('\n');
 }
 function isLikelyQuantity(text=''){
@@ -831,41 +818,131 @@ async function askCampana(to){
   await toButtons(to,'¿En qué *campaña* te encuentras? ', CAMP_BTNS);
 }
 
+async function askCategory(to){
+  const s=S(to); 
+  if (s.lastPrompt==='categoria') return;
+  s.stage='product'; 
+  await markPrompt(s,'categoria'); 
+  s.pending='categoria'; 
+  s.asked.categoria=true;
+  persistS(to); 
+
+  await toText(to, `Te dejo nuestro *catálogo* para que puedas ver nuestras opciones \nhttps://tinyurl.com/f4euhvzk`);
+  await toText(to, `Y nuestra *lista de precios* actualizada:\n${PRICE_LIST_URL}`);
+
+  await toButtons(
+    to,
+    '¿Qué tipo de producto necesitas?',
+    CAT_QR.map(c=>({ title:c.title, payload:c.payload }))
+  );
+}
+
+function productHasMultiPres(prod){
+  const pres = Array.isArray(prod?.presentaciones) ? prod.presentaciones.filter(Boolean) : [];
+  return pres.length > 1;
+}
+function productSinglePres(prod){
+  const pres = Array.isArray(prod?.presentaciones) ? prod.presentaciones.filter(Boolean) : [];
+  return pres.length === 1 ? pres[0] : null;
+}
+async function askPresentacion(to, prod){
+  const s = S(to);
+
+  const pres = (prod?.presentaciones || []).filter(Boolean);
+  if (pres.length <= 1) return;
+
+  // evita duplicados: si ya estás en "presentacion" y no está "stale", no repitas
+  const fresh = s.lastPrompt === 'presentacion' && (Date.now() - (s.lastPromptTs || 0)) < 25000;
+  if (fresh) return;
+
+  await markPrompt(s, 'presentacion'); // <-- importante
+  s.pending = 'presentacion';
+  persistS(to);
+
+  const rows = pres.map(p => ({
+    title: String(p),
+    payload: `PRES_${prod.sku}__${b64u(String(p))}`
+  }));
+  await toList(to, `¿En qué *presentación* deseas *${prod.nombre}*?`, 'Elegir presentación', rows);
+}
+
+
+function productListRow(p){
+  const nombre = p?.nombre || '';
+  const ia     = p?.ingrediente_activo || p?.formulacion || p?.categoria || '';
+  return {
+    title: nombre,
+    description: ia ? `${ia}` : undefined,
+    payload: `PROD_${p.sku}`
+  };
+}
+
 async function listByIA(to, products, iaText){
   const rows = products.slice(0,9).map(productListRow);
   await toList(to, `Productos con IA: ${title(iaText)}`, 'Elegir producto', rows);
   await toText(to, `Decime cuál te interesa y te paso el detalle. *Compra mínima: US$ 3.000*`);
 }
 
+async function listByCategory(to){
+  const s=S(to);
+  const all = getProductsByCategory(s.vars.category||'');
+  if(!all.length){ await toText(to,'Por ahora no tengo productos en esa categoría. ¿Querés ver el catálogo completo?'); return; }
+  const offset = s.vars.catOffset || 0;
+  const remaining = all.length - offset;
+  const show = remaining > 9 ? 9 : remaining;
+
+  const rows = all.slice(offset, offset+show).map(productListRow);
+  if(remaining > show) rows.push({ title:'Ver más…', payload:`CAT_MORE_${offset+show}` });
+
+  await toList(to, `${s.vars.category} disponibles`, 'Elegir producto', rows);
+  if(offset===0) await toText(to, `Decime cuál te interesa y te paso el detalle. *Compra mínima: US$ 3.000*`);
+}
+
 const shouldShowDetail = (s, sku) => s.vars.last_detail_sku !== sku || (Date.now() - (s.vars.last_detail_ts||0)) > 60000;
 const markDetailShown = (s, sku) => { s.vars.last_detail_sku = sku; s.vars.last_detail_ts = Date.now(); };
 
 async function showProduct(to, prod){
-  const s = S(to);
+  const s=S(to);
   s.vars.last_product = prod.nombre;
   s.vars.last_sku = prod.sku;
   s.vars.last_presentacion = null; 
   persistS(to); 
 
-  await toText(to, `Ficha técnica de *${prod.nombre}* 🙌`);
-  const src = productImageSource(prod);
-  if (src) await toImage(to, src);
+  const catNorm = normalizeCatLabel(prod.categoria||'');
+  if(catNorm && !s.vars.category) s.vars.category = catNorm;
 
-  const plagas=(prod.plaga||[]).slice(0,5).join(', ')||'-';
-  const present=(prod.presentaciones||[]).join(', ')||'-';
-  const ia = prod.ingrediente_activo || '-';
-  await toText(to,
-    `• Categoría: ${prod.categoria || '-'}\n`+
-    `• Ingrediente activo: ${ia}\n`+
-    `• Formulación/acción: ${prod.formulacion || '-'}\n`+
-    `• Dosis de referencia: ${prod.dosis || '-'}\n`+
-    `• Espectro objetivo: ${plagas}\n`+
-    `• Presentaciones: ${present}`
-  );
+  if (shouldShowDetail(s, prod.sku)) {
+    await toText(to, `Aquí tienes la ficha técnica de *${prod.nombre}* 📄`);
 
-  await toText(to, `Si gustas, puedes armar tu *lista de compras* aquí y te preparamos tu cotización:\n${CATALOG_URL}`);
+    const src = productImageSource(prod);
+    if (src) {
+      await toImage(to, src);
+    } else {
+      const plagas=(prod.plaga||[]).slice(0,5).join(', ')||'-';
+      const present=(prod.presentaciones||[]).join(', ')||'-';
+      const ia = prod.ingrediente_activo || '-';
+      await toText(to,
+        `Sobre *${prod.nombre}* (${prod.categoria}):`+
+        `\n• Ingrediente activo: ${ia}`+
+        `\n• Formulación / acción: ${prod.formulacion}`+
+        `\n• Dosis de referencia: ${prod.dosis}`+
+        `\n• Espectro objetivo: ${plagas}`+
+        `\n• Presentaciones: ${present}`
+      );
+    }
+    markDetailShown(s, prod.sku);
+  }
+
+    const single = productSinglePres(prod);
+    if (single && !s.vars.last_presentacion) {
+      s.vars.last_presentacion = single;
+    } else if (productHasMultiPres(prod) && !s.vars.last_presentacion) {
+      await askPresentacion(to, prod);   // <-- ya desduplica y marca lastPrompt
+    }
+    persistS(to);
 }
 
+// ===== CARRITO =====
 function addCurrentToCart(s){
   if(!s.vars.last_sku || !s.vars.last_product || !s.vars.cantidad) return false;
   const exists = (s.vars.cart||[]).find(it=>it.sku===s.vars.last_sku);
@@ -958,15 +1035,10 @@ async function nextStep(to){
     }
 
     // (6) Categoría / producto
-      if (s.vars.campana && !s._ctaSent) {
-        s._ctaSent = true; persistS(to);
-        await toText(to,
-          'Perfecto. Ya tengo tus datos iniciales. ' +
-          'Ahora, por favor arma tu *lista de compras* en nuestro catálogo y me la envías aquí para preparar tu cotización formal:'
-        );
-        await toText(to, CATALOG_URL);
-        return;
-      }
+    if(s.vars.last_product && !s.vars.category){
+      const p=(CATALOG||[]).find(pp=>norm(pp.nombre||'')===norm(s.vars.last_product));
+      const c=normalizeCatLabel(p?.categoria||''); if(c) s.vars.category=c;
+    }
 
     if(!s.vars.last_product && !s.vars.category){
     if(stale('categoria') || s.lastPrompt!=='categoria') return askCategory(to);
@@ -1358,6 +1430,11 @@ if (isAdvisor(fromId)) {
         return;
       }
 
+
+      if(id==='QR_SEGUIR'){ await toText(fromId,'Perfecto, vamos a añadir un nuevo producto 🙌.'); await askCategory(fromId); res.sendStatus(200); return; }
+      if(id==='ADD_MORE'){ s.vars.catOffset=0; s.vars.last_product=null; s.vars.last_sku=null; s.vars.last_presentacion=null; s.vars.cantidad=null; s.asked.cantidad=false; persistS(fromId); await toButtons(fromId,'Dime el *nombre del otro producto* o elige una categoría 👇', CAT_QR.map(c=>({title:c.title,payload:c.payload}))); res.sendStatus(200); return; }
+      if(id==='NO_MORE'){ await afterSummary(fromId, 'help'); res.sendStatus(200); return; }
+
       if(/^REF_YES_/.test(id)){
         const sku = id.replace('REF_YES_','');
         const prod = (CATALOG||[]).find(p=>String(p.sku)===String(sku));
@@ -1426,6 +1503,49 @@ if (isAdvisor(fromId)) {
         s.pending=null; s.lastPrompt=null; persistS(fromId);
         await nextStep(fromId); res.sendStatus(200); return;
       }
+      if(/^CAT_/.test(id)){
+        const key = id.replace('CAT_','').toLowerCase();
+        s.vars.category = key==='herbicida' ? 'Herbicida' : key==='insecticida' ? 'Insecticida' : 'Fungicida';
+        s.vars.catOffset = 0; s.stage='product'; s.pending=null; s.lastPrompt=null; persistS(fromId);
+        await nextStep(fromId); res.sendStatus(200); return;
+      }
+      if(/^CAT_MORE_/.test(id)){
+        const next = parseInt(id.replace('CAT_MORE_',''),10) || 0;
+        s.vars.catOffset = next; persistS(fromId);
+        await listByCategory(fromId); res.sendStatus(200); return;
+      }
+      if(/^PROD_/.test(id)){
+        const sku = id.replace('PROD_','');
+        const prod = (CATALOG||[]).find(p=>p.sku===sku);
+        if(prod){
+          s.vars.last_product = prod.nombre; s.vars.last_sku = prod.sku; s.vars.last_presentacion=null;
+          const catNorm = normalizeCatLabel(prod.categoria||''); if(catNorm) s.vars.category = catNorm;
+          persistS(fromId);
+          await showProduct(fromId, prod);
+          if(productHasMultiPres(prod)){
+            // se pidió en showProduct
+          } else if (!s.vars.cantidad && !s.asked.cantidad){
+            s.pending='cantidad'; s.lastPrompt='cantidad'; s.lastPromptTs=Date.now(); s.asked.cantidad=true; persistS(fromId);
+            await toText(fromId,'¿Qué *cantidad* necesitas *(L/KG o unidades)* para este producto?');
+          }
+        }
+        res.sendStatus(200); return;
+      }
+      if(/^PRES_/.test(id)){
+        const m = id.match(/^PRES_(.+?)__(.+)$/);
+        if(m){
+          const sku = m[1];
+          const pres = ub64u(m[2]);
+          if(s.vars.last_sku===sku){
+            s.vars.last_presentacion = pres; persistS(fromId);
+            if(!s.vars.cantidad){
+              s.pending='cantidad'; s.lastPrompt='cantidad'; s.lastPromptTs=Date.now(); s.asked.cantidad=true; persistS(fromId);
+              await toText(fromId,'Perfecto. ¿Qué *cantidad* necesitas *(L/KG o unidades)* para este producto?');
+            }
+          }
+        }
+        res.sendStatus(200); return;
+      }
     }
 
     // ===== TEXTO =====
@@ -1443,23 +1563,6 @@ if (isAdvisor(fromId)) {
       if (s.pending === 'nombre') s.pending = null;
       if (s.lastPrompt === 'nombre') s.lastPrompt = null;
     }
-
-if (looksLikeCatalogCart(text)){
-  const items = parseCatalogCart(text);
-  if (items.length){
-    S(fromId).vars.cart = items;
-    persistS(fromId);
-
-    // Muestra el resumen con tu formato actual
-    await toText(fromId, summaryText(S(fromId)));
-    // Ofrece finalizar (enviar PDF) o seguir agregando datos
-    await toButtons(fromId, '¿Deseas finalizar y recibir tu cotización formal?', [
-      { title:'Finalizar', payload:'QR_FINALIZAR' }
-    ]);
-    res.sendStatus(200); 
-    return;
-  }
-}
 
     if (leadData.dptoZ) {
       const dep = detectDepartamento(leadData.dptoZ) || title((leadData.dptoZ.split('/')[0] || ''));
@@ -1563,7 +1666,7 @@ if (looksLikeCatalogCart(text)){
       if(/horario|atienden|abren|cierran/i.test(tnorm)){ await toText(fromId, `Atendemos ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`); res.sendStatus(200); return; }
       if(wantsLocation(text)){ await toText(fromId, `Nuestra ubicación en Google Maps 👇\nVer ubicación: ${linkMaps()}`); await toButtons(fromId,'¿Hay algo más en lo que pueda ayudarte?',[{title:'Seguir',payload:'QR_SEGUIR'},{title:'Finalizar',payload:'QR_FINALIZAR'}]); res.sendStatus(200); return; }
       if(wantsCatalog(text)){
-        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL}`);
+        await toText(fromId, `Este es nuestro catálogo completo\nhttps://tinyurl.com/f4euhvzk`);
         await toButtons(fromId,'¿Quieres que te ayude a elegir o añadir un producto ahora?',[{title:'Añadir producto', payload:'ADD_MORE'},{title:'Finalizar', payload:'QR_FINALIZAR'}]);
         res.sendStatus(200); return;
       }
@@ -1589,11 +1692,6 @@ if (looksLikeCatalogCart(text)){
       }
       if(cant){ S(fromId).vars.cantidad = cant; persistS(fromId); }
       const prodExact = findProduct(text);
-      if (prodExact){
-        await showProduct(fromId, prodExact);
-        res.sendStatus(200); 
-        return;
-      }
       const iaHits = findProductsByIA(text);
       if (prodExact){
         S(fromId).vars.last_product = prodExact.nombre;
@@ -1840,6 +1938,8 @@ router.post('/wa/agent/handoff', agentAuth, async (req,res)=>{
   }
 });
 
+// g) Enviar media como humano (multiparte)
+// en el endpoint, pásale el mimetype de multer y NO registres en memoria si falla el envío
 router.post('/wa/agent/send-media', agentAuth, upload.array('files', 10), async (req, res) => {
   try{
     const to = req.body?.to;
@@ -1895,5 +1995,7 @@ router.post('/wa/agent/send-media', agentAuth, upload.array('files', 10), async 
     res.status(500).json({ok:false});
   }
 });
+
+
 
 export default router;
