@@ -232,6 +232,7 @@ const canonName = (s='') => title(String(s||'').trim().replace(/\s+/g,' ').toLow
 
 const b64u = s => Buffer.from(String(s),'utf8').toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const ub64u = s => Buffer.from(String(s).replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8');
+const digits = s => String(s || '').replace(/[^\d]/g, '');
 
 function mediaKindFromMime(mime = '') {
   const m = String(mime).toLowerCase();
@@ -339,6 +340,7 @@ function parseCatalogCart(text=''){
   const items = [];
   const lines = text.split('\n').map(l=>l.trim());
   const re = /^\*\s(.+?)(?:\s\((.+?)\))?\s—\s([\d.,]+)\s*([A-Za-z]+)?(?:\s—\s(?:SUBTOTAL:?\s*)?\$?\s*([\d.,]+))?$/;
+
   for (const line of lines){
     const m = line.match(re);
     if (!m) continue;
@@ -351,7 +353,9 @@ function parseCatalogCart(text=''){
     const subtotal_usd  = subUsdRaw ? Number(subUsdRaw) : undefined;
     items.push({ nombre, presentacion, cantidad, subtotal_usd });
   }
- return items;
+  return items;
+}
+
 
 const parsePhone = text=>{
   const m = String(text).match(/(\+?\d[\d\s\-]{6,17}\d)/);
@@ -564,7 +568,6 @@ async function toCatalogButton(to, body = 'Abre el catálogo y arma tu carrito')
   const LANG = process.env.CATALOG_TEMPLATE_LANG || 'es';
 
   if (!TPL) {
-    // Fallback sin exponer link de inicio: el usuario toca "Abrir catálogo" y recién ahí mandamos link
     await toList(to, body, 'Catálogo', [{ id: 'OPEN_CATALOG', title: 'Abrir catálogo' }]);
     return true;
   }
@@ -731,6 +734,12 @@ async function nextStep(to){
   busy.add(to);
   try{
     const s=S(to);
+    const const busy = new Set(); 
+async function nextStep(to){
+  if (busy.has(to)) return;
+  busy.add(to);
+  try{
+    const s=S(to);
     const stale = (key)=> s.lastPrompt===key && (Date.now()-s.lastPromptTs>25000);
     if (s.pending && !stale(s.pending)) return;
 
@@ -774,7 +783,6 @@ async function nextStep(to){
       return;
     }
 
-
     if (s.vars.campana && !s._ctaSent) {
       s._ctaSent = true; persistS(to);
       await toCatalogButton(to, 'Perfecto. Ya tengo tus datos. Abre el catálogo y arma tu *carrito* para cotizar:');
@@ -786,6 +794,7 @@ async function nextStep(to){
   }
 }
 
+
 router.get('/wa/webhook',(req,res)=>{
   const mode=req.query['hub.mode'];
   const token=req.query['hub.verify_token'];
@@ -794,7 +803,6 @@ router.get('/wa/webhook',(req,res)=>{
   return res.sendStatus(403);
 });
 
-const digits = s => String(s||'').replace(/[^\d]/g,'');
 const ADVISOR_WA_NUMBERS = String(
   process.env.ADVISOR_WA_NUMBER ?? process.env.ADVISOR_WA_NUMBERS ?? ''
 )
@@ -806,6 +814,7 @@ const isAdvisor = (id) => ADVISOR_WA_NUMBERS.includes(digits(id));
 
 if (!ADVISOR_WA_NUMBERS.length) console.warn('ADVISOR_WA_NUMBER(S) vacío(s). No se avisará al asesor.');
 console.log('[BOOT] ADVISOR_WA_NUMBERS =', ADVISOR_WA_NUMBERS.length ? ADVISOR_WA_NUMBERS.join(',') : '(vacío)');
+
 
 let advisorWindowTs = 0;                 
 const MS24H = 24*60*60*1000;
@@ -862,7 +871,7 @@ const processed = new Map();
 const PROCESSED_TTL = 5 * 60 * 1000;
 setInterval(()=>{ const now=Date.now(); for(const [k,ts] of processed){ if(now-ts>PROCESSED_TTL) processed.delete(k); } }, 60*1000);
 function seenWamid(id){ if(!id) return false; const now=Date.now(); const old=processed.get(id); processed.set(id,now); return !!old && (now-old)<PROCESSED_TTL; }
-}
+
 
 router.post('/wa/webhook', async (req,res)=>{
 
