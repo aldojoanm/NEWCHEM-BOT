@@ -728,13 +728,6 @@ async function afterSummary(to, variant='cart'){
   }
 }
 
-const busy = new Set(); 
-async function nextStep(to){
-  if (busy.has(to)) return;
-  busy.add(to);
-  try{
-    const s=S(to);
-    const const busy = new Set(); 
 async function nextStep(to){
   if (busy.has(to)) return;
   busy.add(to);
