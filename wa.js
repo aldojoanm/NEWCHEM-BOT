@@ -552,9 +552,27 @@ async function askCategory(to){
     `${CATALOG_URL}\n\n` +
     `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu carrito y preparo la cotización.`
   );
-  await toButtons(to, '¿Abrir catálogo ahora?', [
-    { title: 'Abrir catálogo', payload: 'OPEN_CATALOG' }
-  ]);
+}
+
+function toNumberFlexible(x=''){
+  const s = String(x).trim();
+  const hasDot = s.includes('.');
+  const hasComma = s.includes(',');
+
+  if (hasDot && hasComma){
+    const lastDot = s.lastIndexOf('.');
+    const lastComma = s.lastIndexOf(',');
+    if (lastComma > lastDot){
+      return Number(s.replace(/\./g,'').replace(',','.'));
+    } else {
+      return Number(s.replace(/,/g,''));
+    }
+  } else if (hasComma){
+    return /,\d{1,2}$/.test(s) ? Number(s.replace(',','.')) : Number(s.replace(/,/g,''));
+  } else if (hasDot){
+    return /\.\d{1,2}$/.test(s) ? Number(s) : Number(s.replace(/\./g,''));
+  }
+  return Number(s);
 }
 
 function parseCartFromText(text=''){
@@ -567,15 +585,15 @@ function parseCartFromText(text=''){
   for (const l of lines.slice(1)){
     const mUsd = l.match(/TOTAL[_ ]USD\s*:\s*([\d.,]+)/i);
     const mBs  = l.match(/TOTAL[_ ]BS\s*:\s*([\d.,]+)/i);
-    if (mUsd) { totalUsd = Number(mUsd[1].replace(/\./g,'').replace(',','.')); continue; }
-    if (mBs)  { totalBs  = Number(mBs[1].replace(/\./g,'').replace(',','.'));  continue; }
+    if (mUsd) { totalUsd = toNumberFlexible(mUsd[1]); continue; }
+    if (mBs)  { totalBs  = toNumberFlexible(mBs[1]);  continue; }
     const m = l.match(reItem);
     if (m){
       const nombre = m[1].trim();
       const presentacion = m[2]?.trim() || null;
-      const qty = Number((m[3]||'0').replace(/\./g,'').replace(',','.'));
+      const qty = toNumberFlexible(m[3] || '0');
       const uRaw = (m[4]||'').toLowerCase();
-      const subtotalUsd = m[5] ? Number(m[5].replace(/\./g,'').replace(',','.')) : null;
+      const subtotalUsd = m[5] ? toNumberFlexible(m[5]) : null;
       const unidad = /kg|kilo/.test(uRaw) ? 'Kg'
                    : /l|lt|lts|litro/.test(uRaw) ? 'L'
                    : uRaw ? 'unid' : null;
