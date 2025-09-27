@@ -22,7 +22,10 @@ const upload = multer({
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || 'VERIFY_123';
 const WA_TOKEN        = process.env.WHATSAPP_TOKEN || '';
 const WA_PHONE_ID     = process.env.WHATSAPP_PHONE_ID || '';
-const CATALOG_URL     = process.env.CATALOG_URL || 'https://tinyurl.com/f4euhvzk';
+const CATALOG_ANON_URL  = process.env.CATALOG_ANON_URL  || 'https://tinyurl.com/f4euhvzk'; // sin precios
+const CATALOG_FULL_URL  = process.env.CATALOG_FULL_URL  || 'https://newchem-bot-production.up.railway.app/catalog.html'; // con precios (antes usabas este)
+
+const catalogLinkFor = (s) => (isKnownClient(s) || discoveryComplete(s)) ? CATALOG_FULL_URL : CATALOG_ANON_URL;
 const STORE_LAT       = process.env.STORE_LAT || '-17.7580406';
 const STORE_LNG       = process.env.STORE_LNG || '-63.1532503';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -652,10 +655,11 @@ async function askCategory(to){
   s.pending = 'catalog_link';
   await markPrompt(s, 'catalog_link');
   persistS(to);
+
   await toText(to,
     `Te dejo nuestro *catálogo*.\n` +
-    `${CATALOG_URL}\n\n` +
-    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te preparé tu cotización.`
+    `${CATALOG_FULL_URL}\n\n` +
+    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te prepararé tu cotización.`
   );
 }
 
@@ -822,15 +826,14 @@ function findProduct(text){
 }
 
 async function showProduct(to, prod, { withLink = true, preface = null } = {}) {
-  if (preface) {
-    await toText(to, preface);
-  }
-
+  if (preface) await toText(to, preface);
   const src = productImageSource(prod);
   if (src) await toImage(to, src);
+
   const base = `Te envío la ficha técnica de *${prod.nombre}*.`;
   if (withLink) {
-    await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+    const link = catalogLinkFor(S(to));
+    await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${link}`);
   } else {
     await toText(to, base);
   }
@@ -1194,11 +1197,22 @@ router.post('/wa/webhook', async (req,res)=>{
         res.sendStatus(200);
         return;
       }
-      if (id === 'OPEN_CATALOG') {
-        await toText(fromId, CATALOG_URL);
+        if (id === 'OPEN_CATALOG') {
+          const link = catalogLinkFor(S(fromId));
+          await toText(fromId, link);
+          res.sendStatus(200); return;
+        }
+      if (id==='QR_SEGUIR'){
+        const known = isKnownClient(S(fromId)) || discoveryComplete(S(fromId));
+        if (known) {
+          await toText(fromId,'Perfecto, vamos a añadir tus productos 🙌.');
+          await askCategory(fromId); // enviará el link con precios
+        } else {
+          await toText(fromId,'Podemos realizarte una *cotización*, ¿me ayudas con unos *datos rápidos*?');
+          if (!S(fromId).asked?.nombre) await askNombre(fromId);
+        }
         res.sendStatus(200); return;
       }
-      if(id==='QR_SEGUIR'){ await toText(fromId,'Perfecto, vamos a añadir un nuevo producto 🙌.'); await askCategory(fromId); res.sendStatus(200); return; }
       if (id==='ADD_MORE') {
         await toButtons(fromId,'¿Listo para *cotizar*?', [
           { title:'Cotizar', payload:'QR_FINALIZAR' }
@@ -1372,9 +1386,23 @@ router.post('/wa/webhook', async (req,res)=>{
 
       if(/horario|atienden|abren|cierran/i.test(tnorm)){ await toText(fromId, `Atendemos ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`); res.sendStatus(200); return; }
       if(wantsLocation(text)){ await toText(fromId, `Nuestra ubicación en Google Maps 👇\nVer ubicación: ${linkMaps()}`); await toButtons(fromId,'¿Hay algo más en lo que pueda ayudarte?',[{title:'Seguir',payload:'QR_SEGUIR'},{title:'Finalizar',payload:'QR_FINALIZAR'}]); res.sendStatus(200); return; }
-      if(wantsCatalog(text)){
-        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL}`);
-        await toButtons(fromId,'¿Quieres que te ayude a elegir o añadir un producto ahora?',[{title:'Añadir producto', payload:'ADD_MORE'},{title:'Finalizar', payload:'QR_FINALIZAR'}]);
+      if (wantsCatalog(text)){
+        const known = isKnownClient(s) || discoveryComplete(s);
+        const link = known ? CATALOG_FULL_URL : CATALOG_ANON_URL;
+
+        await toText(fromId, `Este es nuestro catálogo completo\n${link}`);
+
+        if (known) {
+          // Cliente registrado: (opcional) puedes dejar botones o solo enviar link
+          await toButtons(fromId, '¿Quieres que te ayude a añadir productos ahora?', [
+            { title:'Añadir producto', payload:'ADD_MORE' },
+            { title:'Finalizar',       payload:'QR_FINALIZAR' }
+          ]);
+        } else {
+          // Nuevo cliente: arrancar flujo con nuevo copy
+          await toText(fromId, 'Podemos realizarte una *cotización*, ¿me ayudas con unos *datos rápidos*?');
+          if (!s.asked?.nombre) await askNombre(fromId);
+        }
         res.sendStatus(200); return;
       }
       if(wantsClose(text)){
@@ -1416,7 +1444,8 @@ router.post('/wa/webhook', async (req,res)=>{
       }
 
       if (asksPrice(text)){
-        await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+        const link = catalogLinkFor(S(fromId));
+        await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${link}`);
       }
 
       const prodByName = findProduct(text);
