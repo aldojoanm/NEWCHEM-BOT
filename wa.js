@@ -90,9 +90,65 @@ function agentAuth(req,res,next){
 
 function loadJSON(p){ try { return JSON.parse(fs.readFileSync(p,'utf8')); } catch { return {}; } }
 const CATALOG = loadJSON('./knowledge/catalog.json');
-const PLAY    = loadJSON('./knowledge/playbooks.json');
-const FAQS    = loadJSON('./knowledge/faqs.json');
+const ACTIVE_INDEX = buildActiveIndex(Array.isArray(CATALOG) ? CATALOG : []);
 
+function buildActiveIndex(list){
+  const map = new Map();
+  for (const p of list){
+    const bucket = new Set();
+    const raw = [
+      p.activo, p.ingrediente_activo, p.ingrediente, p.ia,
+      ...(Array.isArray(p.activos) ? p.activos : []),
+      ...(Array.isArray(p.syns_activo) ? p.syns_activo : [])
+    ].filter(Boolean);
+
+    for (const r of raw){
+      const clean = norm(String(r)
+        .replace(/\b\d+([.,]\d+)?\s*(g\/l|g\/kg|%|sl|ec|sc|wg|wp)\b/gi,'')
+        .replace(/\s{2,}/g,' ')
+        .trim());
+      if (clean) bucket.add(clean);
+    }
+
+    for (const key of bucket){
+      const arr = map.get(key) || [];
+      arr.push(p);
+      map.set(key, arr);
+    }
+  }
+
+  const EXTRA = {
+    'glifosato': ['Glifosato', 'GLIFO 480', 'GLIFO'],
+    'paraquat':  ['DRIER'],
+    'abamectina':['MEXIN'],
+  };
+  for (const [ia, prodNames] of Object.entries(EXTRA)){
+    for (const name of prodNames){
+      const prod = list.find(p => norm(p.nombre) === norm(name));
+      if (prod){
+        const arr = map.get(ia) || [];
+        if (!arr.includes(prod)) arr.push(prod);
+        map.set(ia, arr);
+      }
+    }
+  }
+  return map;
+}
+
+function findByActiveIngredient(text){
+  const t = norm(text);
+  // intenta match exacto de palabra
+  for (const key of ACTIVE_INDEX.keys()){
+    if (new RegExp(`\\b${key}\\b`).test(t)) {
+      const arr = ACTIVE_INDEX.get(key);
+      if (arr && arr[0]) return arr[0]; // primer producto asociado
+    }
+  }
+  return null;
+}
+
+const PLAY    = loadJSON('./knowledge/playbooks.json');
+const FAQS = loadJSON('./knowledge/faqs.json');
 const DEPARTAMENTOS = ['Santa Cruz','Cochabamba','La Paz','Chuquisaca','Tarija','Oruro','Potosí','Beni','Pando'];
 const SUBZONAS_SCZ  = ['Norte','Este','Sur','Valles','Chiquitania'];
 const CROP_OPTIONS = [
@@ -568,9 +624,9 @@ async function askCategory(to){
   await markPrompt(s, 'catalog_link');
   persistS(to);
   await toText(to,
-    `Te dejo nuestro *catálogo* con carrito.\n` +
+    `Te dejo nuestro *catálogo*.\n` +
     `${CATALOG_URL}\n\n` +
-    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu carrito y preparo la cotización.`
+    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te preparé tu cotización.`
   );
 }
 
@@ -662,9 +718,8 @@ function summaryText(s){
 }
 
 async function askAddMore(to){
-  await toButtons(to, '¿Quieres añadir más productos desde el catálogo?', [
-    { title:'Abrir catálogo', payload:'OPEN_CATALOG' },
-    { title:'Finalizar',      payload:'QR_FINALIZAR' }
+  await toButtons(to, '¿Listo para *cotizar*?', [
+    { title:'Cotizar',      payload:'QR_FINALIZAR' }
   ]);
 }
 
@@ -718,7 +773,6 @@ async function nextStep(to){
   }
 }
 
-
 function findProduct(text){
   const nt = norm(text);
   const list = Array.isArray(CATALOG) ? CATALOG : [];
@@ -738,10 +792,16 @@ function findProduct(text){
   return hit || null;
 }
 
-async function showProduct(to, prod){
+async function showProduct(to, prod, { withLink = true } = {}){
   const src = productImageSource(prod);
   if (src) await toImage(to, src);
-  await toText(to, `Información de *${prod.nombre}*.\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+
+  const base = `Información de *${prod.nombre}*.`;
+  if (withLink) {
+    await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+  } else {
+    await toText(to, base);
+  }
 }
 
 router.get('/wa/webhook',(req,res)=>{
@@ -852,9 +912,8 @@ router.post('/wa/webhook', async (req,res)=>{
       s0.stage = 'checkout';
       persistS(fromId);
       await toText(fromId, summaryText(s0));
-      await toButtons(fromId, '¿Deseas añadir más o finalizamos?', [
-        { title:'Abrir catálogo', payload:'OPEN_CATALOG' },
-        { title:'Finalizar',      payload:'QR_FINALIZAR' }
+      await toButtons(fromId, '¿Listo para *cotizar*?', [
+        { title:'Cotizar', payload:'QR_FINALIZAR' }
       ]);
       res.sendStatus(200);
       return;
@@ -986,8 +1045,16 @@ router.post('/wa/webhook', async (req,res)=>{
         await nextStep(fromId);
         res.sendStatus(200); return;
       } else {
-        await askCategory(fromId);
-        res.sendStatus(200); return;
+        // No se reconoció el producto del anuncio
+        // Si trae imagen del anuncio, muéstrala
+        if (referral?.image_url) {
+          await toImage(fromId, { url: referral.image_url });
+        }
+        await toText(fromId, '¿Es por el producto del anuncio? Escríbeme el *nombre* o el *ingrediente activo*.');
+
+        // NO mandes link aún; pide datos si faltan y deja que el flujo siga
+        await nextStep(fromId);
+        return res.sendStatus(200);
       }
     }
 
@@ -1097,9 +1164,8 @@ router.post('/wa/webhook', async (req,res)=>{
       }
       if(id==='QR_SEGUIR'){ await toText(fromId,'Perfecto, vamos a añadir un nuevo producto 🙌.'); await askCategory(fromId); res.sendStatus(200); return; }
       if (id==='ADD_MORE') {
-        await toButtons(fromId,'¿Quieres añadir más productos desde el catálogo?', [
-          { title:'Abrir catálogo', payload:'OPEN_CATALOG' },
-          { title:'Finalizar',      payload:'QR_FINALIZAR' }
+        await toButtons(fromId,'¿Listo para *cotizar*?', [
+          { title:'Cotizar', payload:'QR_FINALIZAR' }
         ]);
         res.sendStatus(200); return;
       }
@@ -1154,6 +1220,17 @@ router.post('/wa/webhook', async (req,res)=>{
     if(msg.type==='text'){
       const text = (msg.text?.body||'').trim();
       remember(fromId,'user',text);
+
+       const prodByIA = findByActiveIngredient(text);
+        if (prodByIA){
+          if (!s.greeted){
+            await showProduct(fromId, prodByIA, { withLink: false });
+            await nextStep(fromId);
+            return res.sendStatus(200);
+          } else {
+            await showProduct(fromId, prodByIA, { withLink: true });
+          }
+        }
       const tnorm = norm(text);
       if (leadData) {
         s.meta.origin = 'messenger';
