@@ -189,6 +189,7 @@ export async function upsertClientByPhone(record = {}) {
 
   const now = new Date();
   const updated = formatDisplayDate(now);
+  const rowOut = new Array(headers.length).fill('');
 
   // Buscar fila existente
   let foundRowIndex = -1; // índice absoluta en hoja (0-based)
@@ -197,21 +198,20 @@ export async function upsertClientByPhone(record = {}) {
     if (tel === telefono) { foundRowIndex = i; break; }
   }
 
-  // Construir la fila con posición de columnas correcta
-  const rowOut = new Array(headers.length).fill('');
-  // Rellenar existentes para no borrar otras columnas que el usuario hubiera agregado
   if (foundRowIndex >= 0) {
     const prev = rows[foundRowIndex] || [];
     for (let c = 0; c < headers.length; c++) rowOut[c] = prev[c] || '';
   }
 
-  if (iTel  >= 0) rowOut[iTel]  = telefono;
-  if (iNom  >= 0) rowOut[iNom]  = record.nombre || rowOut[iNom] || '';
-  if (iUbi  >= 0) rowOut[iUbi]  = record.ubicacion || rowOut[iUbi] || '';
-  if (iCult >= 0) rowOut[iCult] = record.cultivo || rowOut[iCult] || '';
-  if (iHa   >= 0) rowOut[iHa]   = record.hectareas || rowOut[iHa] || '';
-  if (iCamp >= 0) rowOut[iCamp] = record.campana || rowOut[iCamp] || '';
-  if (iUpd  >= 0) rowOut[iUpd]  = updated;
+const campanaAuto = record.campana || campanaFromNow();
+
+if (iTel  >= 0) rowOut[iTel]  = telefono;
+if (iNom  >= 0) rowOut[iNom]  = record.nombre || rowOut[iNom] || '';
+if (iUbi  >= 0) rowOut[iUbi]  = record.ubicacion || rowOut[iUbi] || '';
+if (iCult >= 0) rowOut[iCult] = record.cultivo || rowOut[iCult] || '';
+if (iHa   >= 0) rowOut[iHa]   = record.hectareas || rowOut[iHa] || '';
+if (iCamp >= 0) rowOut[iCamp] = campanaAuto;  // ← siempre forzar campaña calculada
+if (iUpd  >= 0) rowOut[iUpd]  = updated;
 
   if (foundRowIndex >= 0) {
     // UPDATE fila existente (foundRowIndex es 0-based; +1 para 1-based de Sheets)
@@ -245,7 +245,7 @@ function buildSummaryBullets(s, fechaDisplay) {
   const zona   = s?.vars?.subzona || 'ND';
   const cultivo= (s?.vars?.cultivos && s.vars.cultivos[0]) || 'ND';
   const ha     = s?.vars?.hectareas || 'ND';
-  const camp   = s?.vars?.campana || 'ND';
+  const camp   = s?.vars?.campana || campanaFromNow();
   const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
   const items = (carrito.length > 0) ? carrito : [{
     nombre: s?.vars?.last_product || '',
@@ -316,7 +316,7 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   const ubicacion = [dep, zona].filter(Boolean).join(' - ');
   const cultivo = (s?.vars?.cultivos && s.vars.cultivos[0]) || '';
   const hectareas = s?.vars?.hectareas || '';
-  const campana = s?.vars?.campana || '';
+  const campana = s?.vars?.campana || campanaFromNow();
 
   const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
   const items = (carrito.length > 0)
@@ -364,9 +364,7 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   ];
 }
 
-/* =========================
-   Hoja 1 – append existente
-   ========================= */
+
 export async function appendFromSession(s, fromPhone, estado = 'NUEVO') {
   const sheets = await getSheets();
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
@@ -388,6 +386,27 @@ export async function appendFromSession(s, fromPhone, estado = 'NUEVO') {
 
   return values[0][14]; // cotizacion_id
 }
+
+// === Campaña automática también en Sheets ===
+const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+
+function monthNowTZ(){
+  try{
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: LOCAL_TZ, month:'2-digit' })
+      .formatToParts(new Date());
+    return +parts.find(p => p.type==='month').value;
+  }catch{
+    return (new Date()).getMonth()+1;
+  }
+}
+function campanaFromNow(){
+  const m = monthNowTZ();
+  return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
+}
+
 
 const TAB2_DEFAULT = process.env.SHEETS_TAB2_NAME || 'Hoja 2';
 
@@ -1000,7 +1019,6 @@ export async function pruneExpiredConversations(days = 7) {
     }
   }
 
-  // reescribir la hoja completa
   const all = [header, ...keepRows];
   await sheets.spreadsheets.values.clear({
     spreadsheetId: SPREADSHEET_ID,
@@ -1024,6 +1042,5 @@ export async function appendChatHistoryRow({ wa_id, nombre, ts_iso, role, conten
 export async function purgeOldChatHistory(days = 7) {
   return pruneExpiredConversations(days);
 }
-
 
 export { getSheets, buildRowFromSession };
