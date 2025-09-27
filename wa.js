@@ -33,6 +33,26 @@ const dbg = (...args) => { if (DEBUG_LOGS) console.log(...args); };
 const ADVISOR_NAME = process.env.ADVISOR_NAME || 'Jonathan Arteaga';
 const ADVISOR_ROLE = process.env.ADVISOR_ROLE || 'Encargado de Negocios de New Chem Agroquímicos';
 
+const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+
+function monthInTZ(tz = TZ){
+  try{
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, month:'2-digit' })
+      .formatToParts(new Date());
+    return +parts.find(p => p.type === 'month').value;
+  }catch{
+    return (new Date()).getMonth() + 1; // 1..12
+  }
+}
+
+function currentCampana(){
+  const m = monthInTZ(TZ);
+  return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
+}
+
 function advisorProductList(s){
   const items = (s.vars.cart && s.vars.cart.length) ? s.vars.cart : [];
   return items
