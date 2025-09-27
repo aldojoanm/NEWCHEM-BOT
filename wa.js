@@ -38,6 +38,55 @@ const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3
 const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
   .split(',').map(n => +n.trim()).filter(Boolean);
 
+/* ========= utilidades (¡ahora primero!) ========= */
+const norm  = (t='') => t.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'');
+const title = s => String(s||'').replace(/\w\S*/g, w => w[0].toUpperCase()+w.slice(1).toLowerCase());
+const clamp = (t, n=20) => (String(t).length<=n? String(t) : String(t).slice(0,n-1)+'…');
+const clampN = (t, n) => clamp(t, n);
+const upperNoDia = (t='') => t.normalize('NFD').replace(/\p{Diacritic}/gu,'').toUpperCase();
+const canonName = (s='') => title(String(s||'').trim().replace(/\s+/g,' ').toLowerCase());
+
+const b64u = s => Buffer.from(String(s),'utf8').toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const ub64u = s => Buffer.from(String(s).replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8');
+
+function mediaKindFromMime(mime = '') {
+  const m = String(mime).toLowerCase();
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+function guessMimeByExt(filePath='') {
+  const ext = (filePath.split('.').pop() || '').toLowerCase();
+  const map = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg:'image/jpeg',
+    webp:'image/webp',
+    gif: 'image/gif',
+    pdf: 'application/pdf',
+    doc: 'application/msword',
+    docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    csv: 'text/csv',
+    txt: 'text/plain',
+    mp4: 'video/mp4',
+    m4v: 'video/mp4',
+    mov: 'video/quicktime',
+    mp3: 'audio/mpeg',
+    aac: 'audio/aac',
+    ogg: 'audio/ogg',
+    opus:'audio/ogg',
+    amr: 'audio/amr'
+  };
+  return map[ext] || 'application/octet-stream';
+}
+/* =============================================== */
+
 function monthInTZ(tz = TZ){
   try{
     const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, month:'2-digit' })
@@ -90,8 +139,8 @@ function agentAuth(req,res,next){
 
 function loadJSON(p){ try { return JSON.parse(fs.readFileSync(p,'utf8')); } catch { return {}; } }
 const CATALOG = loadJSON('./knowledge/catalog.json');
-const ACTIVE_INDEX = buildActiveIndex(Array.isArray(CATALOG) ? CATALOG : []);
 
+/* ========= índice por ingrediente activo (usa norm ya definida) ========= */
 function buildActiveIndex(list){
   const map = new Map();
   for (const p of list){
@@ -117,23 +166,33 @@ function buildActiveIndex(list){
     }
   }
 
+  // Sinónimos y mapeos esperados con tus productos actuales
   const EXTRA = {
-    'glifosato': ['Glifosato', 'GLIFO 480', 'GLIFO'],
-    'paraquat':  ['DRIER'],
-    'abamectina':['MEXIN'],
+    'glifosato': ['GLISATO'],
+    'paraquat':  ['DRIER', 'paraquat'],               // por si viene solo "paraquat"
+    'abamectina':['MEXIN', 'abamectin'],
+    'atrazina':  ['SEAL', 'atrazine'],
+    'clethodim': ['SINERGY'],
+    'thiametoxam':['NICOXAM','thiametoxan'],          // corrige variación ortográfica en datos
+    'bifenthrin':['TRENCH','bifentrin'],
+    'fipronil':  ['FENPRONIL'],
+    'emamectin': ['NOATO','emamectin benzoate'],
+    'mancozeb':  ['LAYER']
   };
   for (const [ia, prodNames] of Object.entries(EXTRA)){
+    const iaKey = norm(ia);
     for (const name of prodNames){
       const prod = list.find(p => norm(p.nombre) === norm(name));
       if (prod){
-        const arr = map.get(ia) || [];
+        const arr = map.get(iaKey) || [];
         if (!arr.includes(prod)) arr.push(prod);
-        map.set(ia, arr);
+        map.set(iaKey, arr);
       }
     }
   }
   return map;
 }
+const ACTIVE_INDEX = buildActiveIndex(Array.isArray(CATALOG) ? CATALOG : []);
 
 function findByActiveIngredient(text){
   const t = norm(text);
@@ -285,53 +344,6 @@ function S(id){
 }
 function persistS(id){ persistSessionToDisk(id, S(id)); }
 function clearS(id){ sessions.delete(id); sessionTouched.delete(id); deleteSessionFromDisk(id); }
-
-const norm  = (t='') => t.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'');
-const title = s => String(s||'').replace(/\w\S*/g, w => w[0].toUpperCase()+w.slice(1).toLowerCase());
-const clamp = (t, n=20) => (String(t).length<=n? String(t) : String(t).slice(0,n-1)+'…');
-const clampN = (t, n) => clamp(t, n);
-const upperNoDia = (t='') => t.normalize('NFD').replace(/\p{Diacritic}/gu,'').toUpperCase();
-const canonName = (s='') => title(String(s||'').trim().replace(/\s+/g,' ').toLowerCase());
-
-const b64u = s => Buffer.from(String(s),'utf8').toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-const ub64u = s => Buffer.from(String(s).replace(/-/g,'+').replace(/_/g,'/'), 'base64').toString('utf8');
-
-function mediaKindFromMime(mime = '') {
-  const m = String(mime).toLowerCase();
-  if (m.startsWith('image/')) return 'image';
-  if (m.startsWith('video/')) return 'video';
-  if (m.startsWith('audio/')) return 'audio';
-  return 'document';
-}
-
-function guessMimeByExt(filePath='') {
-  const ext = (filePath.split('.').pop() || '').toLowerCase();
-  const map = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg:'image/jpeg',
-    webp:'image/webp',
-    gif: 'image/gif',
-    pdf: 'application/pdf',
-    doc: 'application/msword',
-    docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    xls: 'application/vnd.ms-excel',
-    xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    ppt: 'application/vnd.ms-powerpoint',
-    pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    csv: 'text/csv',
-    txt: 'text/plain',
-    mp4: 'video/mp4',
-    m4v: 'video/mp4',
-    mov: 'video/quicktime',
-    mp3: 'audio/mpeg',
-    aac: 'audio/aac',
-    ogg: 'audio/ogg',
-    opus:'audio/ogg',
-    amr: 'audio/amr'
-  };
-  return map[ext] || 'application/octet-stream';
-}
 
 function remember(id, role, content){
   const s = S(id);
@@ -1046,13 +1058,11 @@ router.post('/wa/webhook', async (req,res)=>{
         res.sendStatus(200); return;
       } else {
         // No se reconoció el producto del anuncio
-        // Si trae imagen del anuncio, muéstrala
         if (referral?.image_url) {
           await toImage(fromId, { url: referral.image_url });
         }
         await toText(fromId, '¿Es por el producto del anuncio? Escríbeme el *nombre* o el *ingrediente activo*.');
 
-        // NO mandes link aún; pide datos si faltan y deja que el flujo siga
         await nextStep(fromId);
         return res.sendStatus(200);
       }
@@ -1221,16 +1231,16 @@ router.post('/wa/webhook', async (req,res)=>{
       const text = (msg.text?.body||'').trim();
       remember(fromId,'user',text);
 
-       const prodByIA = findByActiveIngredient(text);
-        if (prodByIA){
-          if (!s.greeted){
-            await showProduct(fromId, prodByIA, { withLink: false });
-            await nextStep(fromId);
-            return res.sendStatus(200);
-          } else {
-            await showProduct(fromId, prodByIA, { withLink: true });
-          }
+      const prodByIA = findByActiveIngredient(text);
+      if (prodByIA){
+        if (!s.greeted){
+          await showProduct(fromId, prodByIA, { withLink: false });
+          await nextStep(fromId);
+          return res.sendStatus(200);
+        } else {
+          await showProduct(fromId, prodByIA, { withLink: true });
         }
+      }
       const tnorm = norm(text);
       if (leadData) {
         s.meta.origin = 'messenger';
