@@ -22,10 +22,7 @@ const upload = multer({
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN || 'VERIFY_123';
 const WA_TOKEN        = process.env.WHATSAPP_TOKEN || '';
 const WA_PHONE_ID     = process.env.WHATSAPP_PHONE_ID || '';
-const CATALOG_ANON_URL  = process.env.CATALOG_ANON_URL  || 'https://tinyurl.com/f4euhvzk'; // sin precios
-const CATALOG_FULL_URL  = process.env.CATALOG_FULL_URL  || 'https://newchem-bot-production.up.railway.app/catalog.html'; // con precios (antes usabas este)
-
-const catalogLinkFor = (s) => (isKnownClient(s) || discoveryComplete(s)) ? CATALOG_FULL_URL : CATALOG_ANON_URL;
+const CATALOG_URL     = process.env.CATALOG_URL || 'https://tinyurl.com/f4euhvzk';
 const STORE_LAT       = process.env.STORE_LAT || '-17.7580406';
 const STORE_LNG       = process.env.STORE_LNG || '-63.1532503';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
@@ -581,6 +578,47 @@ async function toAgentText(to, body){
   });
   remember(to,'agent', String(body));
 }
+// === Requisitos mínimos para cotizar ===
+function missingFields(s){
+  const need = [];
+  if (!s.profileName)                      need.push('nombre');
+  if (!s.vars?.departamento)               need.push('departamento');
+  if (!s.vars?.subzona)                    need.push('subzona');
+  if (!s.vars?.cultivos || !s.vars.cultivos.length) need.push('cultivo');
+  if (!s.vars?.hectareas)                  need.push('hectareas');
+  return need;
+}
+
+async function askByKey(to, key){
+  const s = S(to);
+  if (key === 'nombre')        return askNombre(to);
+  if (key === 'departamento')  return askDepartamento(to);
+  if (key === 'subzona') {
+    if (s.vars?.departamento === 'Santa Cruz') return askSubzonaSCZ(to);
+    return askSubzonaLibre(to);
+  }
+  if (key === 'cultivo')       return askCultivo(to);
+  if (key === 'hectareas')     return askHectareas(to);
+}
+
+async function ensureDataThenConfirm(to){
+  const s = S(to);
+  const miss = missingFields(s);
+  if (miss.length){
+    s.meta = s.meta || {};
+    s.meta.finalizeRequested = true;
+    persistS(to);
+    const label = {nombre:'tu *nombre*', departamento:'el *departamento*', subzona:'la *zona*', cultivo:'el *cultivo*', hectareas:'las *hectáreas*'}[miss[0]];
+    await toText(to, `Para generar tu cotización necesito un dato más: ${label}.`);
+    return askByKey(to, miss[0]);
+  }
+
+  await toText(to, summaryText(s));
+  await toButtons(to, '¿Confirmas que estos datos están correctos para generar tu cotización?', [
+    { title:'Confirmar cotización', payload:'QR_CONFIRM_FINALIZAR' }
+  ]);
+}
+
 
 async function markPrompt(s, key){ s.lastPrompt = key; s.lastPromptTs = Date.now(); }
 async function askNombre(to){
@@ -655,11 +693,10 @@ async function askCategory(to){
   s.pending = 'catalog_link';
   await markPrompt(s, 'catalog_link');
   persistS(to);
-
   await toText(to,
     `Te dejo nuestro *catálogo*.\n` +
-    `${CATALOG_FULL_URL}\n\n` +
-    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te prepararé tu cotización.`
+    `${CATALOG_URL}\n\n` +
+    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te preparé tu cotización.`
   );
 }
 
@@ -798,6 +835,21 @@ async function nextStep(to){
     // Campaña: siempre se autocalcula, nunca se pregunta
     s.vars.campana = currentCampana();
 
+    // Si el usuario viene de “Finalizar”, no mandamos catálogo: confirmamos cotización
+    if (s.meta?.finalizeRequested){
+      const miss = missingFields(s);
+      if (miss.length){
+        await askByKey(to, miss[0]);
+        return;
+      }
+      await toText(to, summaryText(s));
+      await toButtons(to, 'Con estos datos te realizaremos tu cotización', [
+        { title:'Cotizar', payload:'QR_CONFIRM_FINALIZAR' }
+      ]);
+      return;
+    }
+
+    // Flujo normal (no viene de “Finalizar”): pasamos a catálogo
     await askCategory(to);
     return;
   } finally {
@@ -826,14 +878,15 @@ function findProduct(text){
 }
 
 async function showProduct(to, prod, { withLink = true, preface = null } = {}) {
-  if (preface) await toText(to, preface);
+  if (preface) {
+    await toText(to, preface);
+  }
+
   const src = productImageSource(prod);
   if (src) await toImage(to, src);
-
   const base = `Te envío la ficha técnica de *${prod.nombre}*.`;
   if (withLink) {
-    const link = catalogLinkFor(S(to));
-    await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${link}`);
+    await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
   } else {
     await toText(to, base);
   }
@@ -1123,16 +1176,31 @@ router.post('/wa/webhook', async (req,res)=>{
         remember(fromId, 'user', `✅ ${id}`);
       }
       if (id === 'QR_FINALIZAR') {
+        await ensureDataThenConfirm(fromId);
+        res.sendStatus(200);
+        return;
+      }
+      if (id === 'QR_CONFIRM_FINALIZAR') {
+        const sNow = S(fromId);
+
+        // Seguridad: si aún faltara algo por carrera, vuelve a pedir
+        const miss = missingFields(sNow);
+        if (miss.length){
+          await ensureDataThenConfirm(fromId);
+          res.sendStatus(200);
+          return;
+        }
+
         let pdfInfo = null;
         try {
-          pdfInfo = await sendAutoQuotePDF(fromId, S(fromId));
+          pdfInfo = await sendAutoQuotePDF(fromId, sNow);
         } catch (err) {
           console.error('AutoQuote error:', err);
         }
         try {
-          if (!s._savedToSheet) {
-            const cotId = await appendFromSession(s, fromId, 'nuevo');
-            s.vars.cotizacion_id = cotId; s._savedToSheet = true; persistS(fromId);
+          if (!sNow._savedToSheet) {
+            const cotId = await appendFromSession(sNow, fromId, 'nuevo');
+            sNow.vars.cotizacion_id = cotId; sNow._savedToSheet = true; persistS(fromId);
           }
         } catch (err) {
           console.error('Sheets append error:', err);
@@ -1140,18 +1208,21 @@ router.post('/wa/webhook', async (req,res)=>{
         try {
           const rec = {
             telefono: String(fromId),
-            nombre: s.profileName || '',
-            ubicacion: [s?.vars?.departamento || '', s?.vars?.subzona || ''].filter(Boolean).join(' - '),
-            cultivo: (s?.vars?.cultivos && s.vars.cultivos[0]) || '',
-            hectareas: s?.vars?.hectareas || '',
-            campana: currentCampana() 
+            nombre: sNow.profileName || '',
+            ubicacion: [sNow?.vars?.departamento || '', sNow?.vars?.subzona || ''].filter(Boolean).join(' - '),
+            cultivo: (sNow?.vars?.cultivos && sNow.vars.cultivos[0]) || '',
+            hectareas: sNow?.vars?.hectareas || '',
+            campana: currentCampana()
           };
           await upsertClientByPhone(rec);
         } catch (e) {
           console.error('upsert WA_CLIENTES al finalizar error:', e);
         }
-        await toText(fromId, '¡Gracias por escribirnos! Te envió la *cotización en PDF*. Si requieres mas información, estamos a tu disposición.');
+
+        await toText(fromId, '¡Gracias! Te envío la *cotización en PDF*. Si requieres más información, estamos a tu disposición.');
         await toText(fromId, 'Para volver a activar el asistente, por favor, escribe *Asistente New Chem*.');
+
+        // (se mantiene tu reenvío al asesor)
         if (ADVISOR_WA_NUMBERS.length) {
           const txt = compileAdvisorAlert(S(fromId), fromId);
           for (const advisor of ADVISOR_WA_NUMBERS) {
@@ -1167,52 +1238,35 @@ router.post('/wa/webhook', async (req,res)=>{
           try {
             let mediaId = pdfInfo?.mediaId || null;
             let filename = pdfInfo?.filename ||
-              `Cotizacion_${(s.profileName || String(fromId)).replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
-            const caption = `Cotización — ${s.profileName || fromId}`;
+              `Cotizacion_${(sNow.profileName || String(fromId)).replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
+            const caption = `Cotización — ${sNow.profileName || fromId}`;
             if (!mediaId && pdfInfo?.path) {
               mediaId = await waUploadMediaFromFile(pdfInfo.path, 'application/pdf');
             }
             if (mediaId) {
               for (const advisor of ADVISOR_WA_NUMBERS) {
-                const okDoc = await waSendQ(advisor, {
-                  messaging_product: 'whatsapp',
-                  to: advisor,
-                  type: 'document',
-                  document: { id: mediaId, filename, caption }
-                });
-                if (!okDoc) console.warn('[ADVISOR] PDF no enviado a', advisor);
+                await waSendQ(advisor, { messaging_product:'whatsapp', to:advisor, type:'document', document:{ id:mediaId, filename, caption } });
               }
-            } else {
-              console.warn('[ADVISOR] No se obtuvo mediaId ni path del PDF para reenviar al asesor.');
             }
-          } catch (err) {
-            console.error('[ADVISOR] error al reenviar PDF:', err);
-          }
+          } catch (err) { console.error('[ADVISOR] error al reenviar PDF:', err); }
         }
+
         humanOn(fromId, 4);
-        s._closedAt = Date.now();
-        s.stage = 'closed';
+        sNow._closedAt = Date.now();
+        sNow.stage = 'closed';
+        sNow.meta = sNow.meta || {};
+        sNow.meta.finalizeRequested = false; // limpiamos el flag
         persistS(fromId);
         broadcastAgent('convos', { id: fromId });
         res.sendStatus(200);
         return;
       }
-        if (id === 'OPEN_CATALOG') {
-          const link = catalogLinkFor(S(fromId));
-          await toText(fromId, link);
-          res.sendStatus(200); return;
-        }
-      if (id==='QR_SEGUIR'){
-        const known = isKnownClient(S(fromId)) || discoveryComplete(S(fromId));
-        if (known) {
-          await toText(fromId,'Perfecto, vamos a añadir tus productos 🙌.');
-          await askCategory(fromId); // enviará el link con precios
-        } else {
-          await toText(fromId,'Podemos realizarte una *cotización*, ¿me ayudas con unos *datos rápidos*?');
-          if (!S(fromId).asked?.nombre) await askNombre(fromId);
-        }
+
+      if (id === 'OPEN_CATALOG') {
+        await toText(fromId, CATALOG_URL);
         res.sendStatus(200); return;
       }
+      if(id==='QR_SEGUIR'){ await toText(fromId,'Perfecto, vamos a añadir tus productos 🙌.'); await askCategory(fromId); res.sendStatus(200); return; }
       if (id==='ADD_MORE') {
         await toButtons(fromId,'¿Listo para *cotizar*?', [
           { title:'Cotizar', payload:'QR_FINALIZAR' }
@@ -1386,23 +1440,8 @@ router.post('/wa/webhook', async (req,res)=>{
 
       if(/horario|atienden|abren|cierran/i.test(tnorm)){ await toText(fromId, `Atendemos ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`); res.sendStatus(200); return; }
       if(wantsLocation(text)){ await toText(fromId, `Nuestra ubicación en Google Maps 👇\nVer ubicación: ${linkMaps()}`); await toButtons(fromId,'¿Hay algo más en lo que pueda ayudarte?',[{title:'Seguir',payload:'QR_SEGUIR'},{title:'Finalizar',payload:'QR_FINALIZAR'}]); res.sendStatus(200); return; }
-      if (wantsCatalog(text)){
-        const known = isKnownClient(s) || discoveryComplete(s);
-        const link = known ? CATALOG_FULL_URL : CATALOG_ANON_URL;
-
-        await toText(fromId, `Este es nuestro catálogo completo\n${link}`);
-
-        if (known) {
-          // Cliente registrado: (opcional) puedes dejar botones o solo enviar link
-          await toButtons(fromId, '¿Quieres que te ayude a añadir productos ahora?', [
-            { title:'Añadir producto', payload:'ADD_MORE' },
-            { title:'Finalizar',       payload:'QR_FINALIZAR' }
-          ]);
-        } else {
-          // Nuevo cliente: arrancar flujo con nuevo copy
-          await toText(fromId, 'Podemos realizarte una *cotización*, ¿me ayudas con unos *datos rápidos*?');
-          if (!s.asked?.nombre) await askNombre(fromId);
-        }
+      if(wantsCatalog(text)){
+        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL} \n Puedes añadir productos al carrito y tocar *Enviar a WhatsApp* para cotizar.`);
         res.sendStatus(200); return;
       }
       if(wantsClose(text)){
@@ -1444,8 +1483,7 @@ router.post('/wa/webhook', async (req,res)=>{
       }
 
       if (asksPrice(text)){
-        const link = catalogLinkFor(S(fromId));
-        await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${link}`);
+        await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
       }
 
       const prodByName = findProduct(text);
