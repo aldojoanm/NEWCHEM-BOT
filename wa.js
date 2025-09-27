@@ -821,10 +821,13 @@ function findProduct(text){
   return hit || null;
 }
 
-async function showProduct(to, prod, { withLink = true } = {}){
+async function showProduct(to, prod, { withLink = true, preface = null } = {}) {
+  if (preface) {
+    await toText(to, preface);
+  }
+
   const src = productImageSource(prod);
   if (src) await toImage(to, src);
-
   const base = `Información de *${prod.nombre}*.`;
   if (withLink) {
     await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
@@ -1069,26 +1072,26 @@ router.post('/wa/webhook', async (req,res)=>{
         const byText = findProduct(bits);
         prod = byQS || byMedia || byText || null;
       }catch{}
-      if (prod) {
-      const known = isKnownClient(s) || discoveryComplete(s);
+        if (prod) {
+          const known = isKnownClient(s) || discoveryComplete(s);
 
-        // Imagen del producto; link al catálogo solo si es cliente conocido o ya completó el flujo
-        await showProduct(fromId, prod, { withLink: known });
+          if (!known) {
+            s.greeted = true;
+            persistS(fromId);
 
-        if (!known) {
-          // Primer contacto: saludo y pedir nombre (sin catálogo)
-          s.greeted = true; // para que no vuelva a saludar dos veces
-          persistS(fromId);
-          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
-          await askNombre(fromId);
+            await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+            await showProduct(fromId, prod, {
+              withLink: false,
+              preface: `Con mucho gusto te envío la *ficha técnica* de *${prod.nombre}* 👇`
+            });
+            await askNombre(fromId);
+            return res.sendStatus(200);
+          }
+
+          await showProduct(fromId, prod, { withLink: true });
+          await nextStep(fromId);
           return res.sendStatus(200);
         }
-
-        // Cliente conocido: puede seguir normalmente
-        await nextStep(fromId);
-        res.sendStatus(200);
-        return;
-      }
     }
 
     const isLeadMsg = !!leadData;
@@ -1417,16 +1420,26 @@ router.post('/wa/webhook', async (req,res)=>{
       }
 
       const prodByName = findProduct(text);
-      if (prodByName){
+      if (prodByName) {
         const sNow = S(fromId);
         const known = isKnownClient(sNow) || discoveryComplete(sNow);
-        await showProduct(fromId, prodByName, { withLink: known });
 
-        // Si es primer contacto y aún no preguntamos nombre, pedirlo
-        if (!known && !sNow.asked?.nombre && sNow.pending !== 'nombre') {
-          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
-          await askNombre(fromId);
-          return res.sendStatus(200);
+        if (!known) {
+          if (!sNow.greeted) {
+            await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+            sNow.greeted = true; persistS(fromId);
+          }
+          await showProduct(fromId, prodByName, {
+            withLink: false,
+            preface: `Con mucho gusto te envío la *ficha técnica* de *${prodByName.nombre}* 👇`
+          });
+          if (!sNow.asked?.nombre && sNow.pending !== 'nombre') {
+            await askNombre(fromId);
+            return res.sendStatus(200);
+          }
+        } else {
+          // Cliente conocido
+          await showProduct(fromId, prodByName, { withLink: true });
         }
       }
 
