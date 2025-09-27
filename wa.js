@@ -828,7 +828,7 @@ async function showProduct(to, prod, { withLink = true, preface = null } = {}) {
 
   const src = productImageSource(prod);
   if (src) await toImage(to, src);
-  const base = `Te envío la ficha técnica de *${prod.nombre}*.`;
+  const base = `Te ayudo a realizar tu cotización.`;
   if (withLink) {
     await toText(to, `${base}\nPara cotizar, ábrelo en el catálogo, añádelo al carrito y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
   } else {
