@@ -578,47 +578,6 @@ async function toAgentText(to, body){
   });
   remember(to,'agent', String(body));
 }
-// === Requisitos mínimos para cotizar ===
-function missingFields(s){
-  const need = [];
-  if (!s.profileName)                      need.push('nombre');
-  if (!s.vars?.departamento)               need.push('departamento');
-  if (!s.vars?.subzona)                    need.push('subzona');
-  if (!s.vars?.cultivos || !s.vars.cultivos.length) need.push('cultivo');
-  if (!s.vars?.hectareas)                  need.push('hectareas');
-  return need;
-}
-
-async function askByKey(to, key){
-  const s = S(to);
-  if (key === 'nombre')        return askNombre(to);
-  if (key === 'departamento')  return askDepartamento(to);
-  if (key === 'subzona') {
-    if (s.vars?.departamento === 'Santa Cruz') return askSubzonaSCZ(to);
-    return askSubzonaLibre(to);
-  }
-  if (key === 'cultivo')       return askCultivo(to);
-  if (key === 'hectareas')     return askHectareas(to);
-}
-
-async function ensureDataThenConfirm(to){
-  const s = S(to);
-  const miss = missingFields(s);
-  if (miss.length){
-    s.meta = s.meta || {};
-    s.meta.finalizeRequested = true;
-    persistS(to);
-    const label = {nombre:'tu *nombre*', departamento:'el *departamento*', subzona:'la *zona*', cultivo:'el *cultivo*', hectareas:'las *hectáreas*'}[miss[0]];
-    await toText(to, `Para generar tu cotización necesito un dato más: ${label}.`);
-    return askByKey(to, miss[0]);
-  }
-
-  await toText(to, summaryText(s));
-  await toButtons(to, '¿Confirmas que estos datos están correctos para generar tu cotización?', [
-    { title:'Confirmar cotización', payload:'QR_CONFIRM_FINALIZAR' }
-  ]);
-}
-
 
 async function markPrompt(s, key){ s.lastPrompt = key; s.lastPromptTs = Date.now(); }
 async function askNombre(to){
@@ -835,21 +794,6 @@ async function nextStep(to){
     // Campaña: siempre se autocalcula, nunca se pregunta
     s.vars.campana = currentCampana();
 
-    // Si el usuario viene de “Finalizar”, no mandamos catálogo: confirmamos cotización
-    if (s.meta?.finalizeRequested){
-      const miss = missingFields(s);
-      if (miss.length){
-        await askByKey(to, miss[0]);
-        return;
-      }
-      await toText(to, summaryText(s));
-      await toButtons(to, 'Con estos datos te realizaremos tu cotización', [
-        { title:'Cotizar', payload:'QR_CONFIRM_FINALIZAR' }
-      ]);
-      return;
-    }
-
-    // Flujo normal (no viene de “Finalizar”): pasamos a catálogo
     await askCategory(to);
     return;
   } finally {
@@ -1176,31 +1120,16 @@ router.post('/wa/webhook', async (req,res)=>{
         remember(fromId, 'user', `✅ ${id}`);
       }
       if (id === 'QR_FINALIZAR') {
-        await ensureDataThenConfirm(fromId);
-        res.sendStatus(200);
-        return;
-      }
-      if (id === 'QR_CONFIRM_FINALIZAR') {
-        const sNow = S(fromId);
-
-        // Seguridad: si aún faltara algo por carrera, vuelve a pedir
-        const miss = missingFields(sNow);
-        if (miss.length){
-          await ensureDataThenConfirm(fromId);
-          res.sendStatus(200);
-          return;
-        }
-
         let pdfInfo = null;
         try {
-          pdfInfo = await sendAutoQuotePDF(fromId, sNow);
+          pdfInfo = await sendAutoQuotePDF(fromId, S(fromId));
         } catch (err) {
           console.error('AutoQuote error:', err);
         }
         try {
-          if (!sNow._savedToSheet) {
-            const cotId = await appendFromSession(sNow, fromId, 'nuevo');
-            sNow.vars.cotizacion_id = cotId; sNow._savedToSheet = true; persistS(fromId);
+          if (!s._savedToSheet) {
+            const cotId = await appendFromSession(s, fromId, 'nuevo');
+            s.vars.cotizacion_id = cotId; s._savedToSheet = true; persistS(fromId);
           }
         } catch (err) {
           console.error('Sheets append error:', err);
@@ -1208,21 +1137,18 @@ router.post('/wa/webhook', async (req,res)=>{
         try {
           const rec = {
             telefono: String(fromId),
-            nombre: sNow.profileName || '',
-            ubicacion: [sNow?.vars?.departamento || '', sNow?.vars?.subzona || ''].filter(Boolean).join(' - '),
-            cultivo: (sNow?.vars?.cultivos && sNow.vars.cultivos[0]) || '',
-            hectareas: sNow?.vars?.hectareas || '',
-            campana: currentCampana()
+            nombre: s.profileName || '',
+            ubicacion: [s?.vars?.departamento || '', s?.vars?.subzona || ''].filter(Boolean).join(' - '),
+            cultivo: (s?.vars?.cultivos && s.vars.cultivos[0]) || '',
+            hectareas: s?.vars?.hectareas || '',
+            campana: currentCampana() 
           };
           await upsertClientByPhone(rec);
         } catch (e) {
           console.error('upsert WA_CLIENTES al finalizar error:', e);
         }
-
-        await toText(fromId, '¡Gracias! Te envío la *cotización en PDF*. Si requieres más información, estamos a tu disposición.');
+        await toText(fromId, '¡Gracias por escribirnos! Te envió la *cotización en PDF*. Si requieres mas información, estamos a tu disposición.');
         await toText(fromId, 'Para volver a activar el asistente, por favor, escribe *Asistente New Chem*.');
-
-        // (se mantiene tu reenvío al asesor)
         if (ADVISOR_WA_NUMBERS.length) {
           const txt = compileAdvisorAlert(S(fromId), fromId);
           for (const advisor of ADVISOR_WA_NUMBERS) {
@@ -1238,30 +1164,36 @@ router.post('/wa/webhook', async (req,res)=>{
           try {
             let mediaId = pdfInfo?.mediaId || null;
             let filename = pdfInfo?.filename ||
-              `Cotizacion_${(sNow.profileName || String(fromId)).replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
-            const caption = `Cotización — ${sNow.profileName || fromId}`;
+              `Cotizacion_${(s.profileName || String(fromId)).replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
+            const caption = `Cotización — ${s.profileName || fromId}`;
             if (!mediaId && pdfInfo?.path) {
               mediaId = await waUploadMediaFromFile(pdfInfo.path, 'application/pdf');
             }
             if (mediaId) {
               for (const advisor of ADVISOR_WA_NUMBERS) {
-                await waSendQ(advisor, { messaging_product:'whatsapp', to:advisor, type:'document', document:{ id:mediaId, filename, caption } });
+                const okDoc = await waSendQ(advisor, {
+                  messaging_product: 'whatsapp',
+                  to: advisor,
+                  type: 'document',
+                  document: { id: mediaId, filename, caption }
+                });
+                if (!okDoc) console.warn('[ADVISOR] PDF no enviado a', advisor);
               }
+            } else {
+              console.warn('[ADVISOR] No se obtuvo mediaId ni path del PDF para reenviar al asesor.');
             }
-          } catch (err) { console.error('[ADVISOR] error al reenviar PDF:', err); }
+          } catch (err) {
+            console.error('[ADVISOR] error al reenviar PDF:', err);
+          }
         }
-
         humanOn(fromId, 4);
-        sNow._closedAt = Date.now();
-        sNow.stage = 'closed';
-        sNow.meta = sNow.meta || {};
-        sNow.meta.finalizeRequested = false; // limpiamos el flag
+        s._closedAt = Date.now();
+        s.stage = 'closed';
         persistS(fromId);
         broadcastAgent('convos', { id: fromId });
         res.sendStatus(200);
         return;
       }
-
       if (id === 'OPEN_CATALOG') {
         await toText(fromId, CATALOG_URL);
         res.sendStatus(200); return;
@@ -1441,7 +1373,8 @@ router.post('/wa/webhook', async (req,res)=>{
       if(/horario|atienden|abren|cierran/i.test(tnorm)){ await toText(fromId, `Atendemos ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`); res.sendStatus(200); return; }
       if(wantsLocation(text)){ await toText(fromId, `Nuestra ubicación en Google Maps 👇\nVer ubicación: ${linkMaps()}`); await toButtons(fromId,'¿Hay algo más en lo que pueda ayudarte?',[{title:'Seguir',payload:'QR_SEGUIR'},{title:'Finalizar',payload:'QR_FINALIZAR'}]); res.sendStatus(200); return; }
       if(wantsCatalog(text)){
-        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL} \n Puedes añadir productos al carrito y tocar *Enviar a WhatsApp* para cotizar.`);
+        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL}`);
+        await toButtons(fromId,'¿Quieres que te ayude a elegir o añadir un producto ahora?',[{title:'Añadir producto', payload:'ADD_MORE'},{title:'Finalizar', payload:'QR_FINALIZAR'}]);
         res.sendStatus(200); return;
       }
       if(wantsClose(text)){
