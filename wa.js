@@ -248,6 +248,23 @@ const HA_LABEL = {
 
 const linkMaps  = () => `https://www.google.com/maps?q=${encodeURIComponent(`${STORE_LAT},${STORE_LNG}`)}`;
 
+const isKnownClient = (s) => Boolean(
+  (s?.meta?.preloadedFromSheet && (
+    s?.profileName ||
+    s?.vars?.departamento ||
+    (s?.vars?.cultivos && s.vars.cultivos.length) ||
+    s?.vars?.hectareas
+  )) || s?._savedToSheet
+);
+
+const discoveryComplete = (s) => Boolean(
+  s?.profileName &&
+  s?.vars?.departamento &&
+  s?.vars?.subzona &&
+  (s?.vars?.cultivos && s.vars.cultivos.length) &&
+  s?.vars?.hectareas
+);
+
 const LIST_TITLE_MAX = 24;
 const LIST_DESC_MAX  = 72;
 
@@ -1052,19 +1069,25 @@ router.post('/wa/webhook', async (req,res)=>{
         const byText = findProduct(bits);
         prod = byQS || byMedia || byText || null;
       }catch{}
-      if (prod){
-        await showProduct(fromId, prod);
-        await nextStep(fromId);
-        res.sendStatus(200); return;
-      } else {
-        // No se reconoció el producto del anuncio
-        if (referral?.image_url) {
-          await toImage(fromId, { url: referral.image_url });
-        }
-        await toText(fromId, '¿Es por el producto del anuncio? Escríbeme el *nombre* o el *ingrediente activo*.');
+      if (prod) {
+      const known = isKnownClient(s) || discoveryComplete(s);
 
+        // Imagen del producto; link al catálogo solo si es cliente conocido o ya completó el flujo
+        await showProduct(fromId, prod, { withLink: known });
+
+        if (!known) {
+          // Primer contacto: saludo y pedir nombre (sin catálogo)
+          s.greeted = true; // para que no vuelva a saludar dos veces
+          persistS(fromId);
+          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+          await askNombre(fromId);
+          return res.sendStatus(200);
+        }
+
+        // Cliente conocido: puede seguir normalmente
         await nextStep(fromId);
-        return res.sendStatus(200);
+        res.sendStatus(200);
+        return;
       }
     }
 
@@ -1395,7 +1418,16 @@ router.post('/wa/webhook', async (req,res)=>{
 
       const prodByName = findProduct(text);
       if (prodByName){
-        await showProduct(fromId, prodByName);
+        const sNow = S(fromId);
+        const known = isKnownClient(sNow) || discoveryComplete(sNow);
+        await showProduct(fromId, prodByName, { withLink: known });
+
+        // Si es primer contacto y aún no preguntamos nombre, pedirlo
+        if (!known && !sNow.asked?.nombre && sNow.pending !== 'nombre') {
+          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+          await askNombre(fromId);
+          return res.sendStatus(200);
+        }
       }
 
       try {
