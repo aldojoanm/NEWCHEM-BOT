@@ -684,36 +684,54 @@ function toNumberFlexible(x=''){
 
 function parseCartFromText(text=''){
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  const headerOK = /^(CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(lines[0] || '');
+
+  // Encabezados válidos (nuevo + legacy)
+  const headerOK = /^(PEDIDO NEW CHEM|CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(lines[0] || '');
   if (!headerOK) return null;
+
   const items = [];
   let totalUsd = null, totalBs = null;
-  const reItem = /^\*\s*(.+?)(?:\s*\((.+?)\))?\s*—\s*([\d.,]+)\s*(l|lt|lts|litros?|kg|kilos?|unid|unidad(?:es)?)?(?:\s*—\s*SUBTOTAL:\s*\$?\s*([\d.,]+))?$/i;
+
+  // Ítems:
+  // "* NOMBRE (PRES) — 10 L — SUBTOTAL: US$ 100.00 · Bs 696.00"
+  // También acepta el legacy: "... — SUBTOTAL: $100.00"
+  const reItem = /^\*\s*(.+?)(?:\s*\((.+?)\))?\s*—\s*([\d.,]+)\s*(l|lt|lts|litros?|kg|kilos?|unid|unidad(?:es)?)?(?:\s*—\s*SUBTOTAL\s*:\s*(?:U?S?\$?\s*([\d.,]+))(?:\s*[·,]\s*Bs\s*([\d.,]+))?)?$/i;
+
+  // Totales (con o sin guion bajo, con o sin ":")
+  const reTotUsd = /^TOTAL[_\s]?USD\s*:?\s*([\d.,]+)/i;
+  const reTotBs  = /^TOTAL[_\s]?BS\s*:?\s*([\d.,]+)/i;
+
   for (const l of lines.slice(1)){
-    const mUsd = l.match(/TOTAL[_ ]USD\s*:\s*([\d.,]+)/i);
-    const mBs  = l.match(/TOTAL[_ ]BS\s*:\s*([\d.,]+)/i);
+    const mUsd = l.match(reTotUsd);
+    const mBs  = l.match(reTotBs);
     if (mUsd) { totalUsd = toNumberFlexible(mUsd[1]); continue; }
     if (mBs)  { totalBs  = toNumberFlexible(mBs[1]);  continue; }
+
     const m = l.match(reItem);
     if (m){
-      const nombre = m[1].trim();
+      const nombre       = m[1].trim();
       const presentacion = m[2]?.trim() || null;
-      const qty = toNumberFlexible(m[3] || '0');
-      const uRaw = (m[4]||'').toLowerCase();
-      const subtotalUsd = m[5] ? toNumberFlexible(m[5]) : null;
+      const qty          = toNumberFlexible(m[3] || '0');
+      const uRaw         = (m[4]||'').toLowerCase();
+      const subUsd       = m[5] ? toNumberFlexible(m[5]) : null;
+      const subBs        = m[6] ? toNumberFlexible(m[6]) : null;
+
       const unidad = /kg|kilo/.test(uRaw) ? 'Kg'
                    : /l|lt|lts|litro/.test(uRaw) ? 'L'
                    : uRaw ? 'unid' : null;
+
       items.push({
         nombre,
         presentacion,
         cantidad: unidad ? `${qty} ${unidad}` : String(qty),
         cantidad_num: qty,
         unidad: unidad || undefined,
-        subtotal_usd: subtotalUsd ?? undefined
+        subtotal_usd: subUsd ?? undefined,
+        subtotal_bs:  subBs  ?? undefined
       });
     }
   }
+
   return items.length ? { items, totalUsd, totalBs } : null;
 }
 

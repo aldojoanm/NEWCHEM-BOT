@@ -281,21 +281,20 @@ function buildWaText() {
     const cant   = fmt2(it.cantidad);
     const unidad = it.unidad ? ` ${it.unidad}` : '';
     const pres   = it.presentacion ? ` (${it.presentacion})` : '';
-    const subtotal = (it.subtotal_usd != null)
-      ? Number(it.subtotal_usd)
-      : (it.precio_usd != null ? Number(it.precio_usd) * Number(it.cantidad || 0) : null);
-    const subTxt = (subtotal != null) ? ` — SUBTOTAL: $${fmt2(subtotal)}` : '';
-    return `* ${it.nombre}${pres} — ${cant}${unidad}${subTxt}`;
+    const subUsd = (it.precio_usd != null ? Number(it.precio_usd) * Number(it.cantidad || 0) : 0);
+    const subBs  = (it.precio_bs  != null ? Number(it.precio_bs)  * Number(it.cantidad || 0) : 0);
+    return `* ${it.nombre}${pres} — ${cant}${unidad} — SUBTOTAL: US$ ${fmt2(subUsd)} · Bs ${fmt2(subBs)}`;
   });
 
   const t = totals();
   return [
-    'CART_V1 NEWCHEM',
+    'PEDIDO NEW CHEM',
     ...lines,
-    `TOTAL_USD: ${fmt2(t.usd)}`,
-    `TOTAL_BS: ${fmt2(t.bs)}`
+    `TOTAL USD: ${fmt2(t.usd)}`,
+    `TOTAL BS: ${fmt2(t.bs)}`
   ].join('\n');
 }
+
 
   function trySend(){
     const t = totals();
