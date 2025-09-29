@@ -265,6 +265,8 @@ const discoveryComplete = (s) => Boolean(
   s?.vars?.hectareas
 );
 
+const shouldShowLink = (s) => isKnownClient(s) || discoveryComplete(s);
+
 const LIST_TITLE_MAX = 24;
 const LIST_DESC_MAX  = 72;
 
@@ -655,7 +657,7 @@ async function askCategory(to){
   await toText(to,
     `Te dejo nuestro *catálogo*.\n` +
     `${CATALOG_URL}\n\n` +
-    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te preparé tu cotización.`
+    `👉 Añade tus productos y toca *Enviar a WhatsApp*. Yo recibiré tu pedido y te prepararé tu cotización.`
   );
 }
 
@@ -1094,21 +1096,6 @@ router.post('/wa/webhook', async (req,res)=>{
         }
     }
 
-    const isLeadMsg = !!leadData;
-    if(!s.greeted){
-      s.greeted = true;
-      persistS(fromId);
-      resetProductState(s);
-      if(!isLeadMsg){
-        await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte!, Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
-      }
-      if(!isLeadMsg && !s.asked.nombre){
-        await askNombre(fromId);
-        res.sendStatus(200);
-        return;
-      }
-    }
-
     if(msg.type==='interactive'){
       const br = msg.interactive?.button_reply;
       const lr = msg.interactive?.list_reply;
@@ -1258,15 +1245,40 @@ router.post('/wa/webhook', async (req,res)=>{
       remember(fromId,'user',text);
 
       const prodByIA = findByActiveIngredient(text);
-      if (prodByIA){
-        if (!s.greeted){
-          await showProduct(fromId, prodByIA, { withLink: false });
+      if (prodByIA) {
+        const sNow = S(fromId);
+        const canLink = shouldShowLink(sNow);
+
+        if (!sNow.greeted) {
+          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+          sNow.greeted = true; persistS(fromId);
+
+          await showProduct(fromId, prodByIA, {
+            withLink: false,
+            preface: `Con mucho gusto te envío la *ficha técnica* de *${prodByIA.nombre}* 👇`
+          });
+
+          if (!sNow.asked?.nombre && sNow.pending !== 'nombre') {
+            await askNombre(fromId);
+            return res.sendStatus(200);
+          }
           await nextStep(fromId);
           return res.sendStatus(200);
-        } else {
-          await showProduct(fromId, prodByIA, { withLink: true });
+        }
+
+        // Si NO es primer mensaje, solo muestra link si ya completamos discovery/cliente conocido
+        await showProduct(fromId, prodByIA, {
+          withLink: canLink,
+          preface: canLink ? null : `Con mucho gusto te envío la *ficha técnica* de *${prodByIA.nombre}* 👇`
+        });
+
+        if (!canLink && !sNow.asked?.nombre && sNow.pending !== 'nombre') {
+          await askNombre(fromId);
+          return res.sendStatus(200);
         }
       }
+
+
       const tnorm = norm(text);
       if (leadData) {
         s.meta.origin = 'messenger';
@@ -1372,10 +1384,16 @@ router.post('/wa/webhook', async (req,res)=>{
 
       if(/horario|atienden|abren|cierran/i.test(tnorm)){ await toText(fromId, `Atendemos ${FAQS?.horarios || 'Lun–Vie 8:00–17:00'} 🙂`); res.sendStatus(200); return; }
       if(wantsLocation(text)){ await toText(fromId, `Nuestra ubicación en Google Maps 👇\nVer ubicación: ${linkMaps()}`); await toButtons(fromId,'¿Hay algo más en lo que pueda ayudarte?',[{title:'Seguir',payload:'QR_SEGUIR'},{title:'Finalizar',payload:'QR_FINALIZAR'}]); res.sendStatus(200); return; }
-      if(wantsCatalog(text)){
-        await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL}`);
-        await toButtons(fromId,'¿Quieres que te ayude a elegir o añadir un producto ahora?',[{title:'Añadir producto', payload:'ADD_MORE'},{title:'Finalizar', payload:'QR_FINALIZAR'}]);
-        res.sendStatus(200); return;
+      if (wantsCatalog(text)) {
+        if (shouldShowLink(S(fromId))) {
+          await toText(fromId, `Este es nuestro catálogo completo\n${CATALOG_URL}`);
+          await toButtons(fromId,'¿Quieres que te ayude a elegir o añadir un producto ahora?',
+            [{title:'Añadir producto', payload:'ADD_MORE'}, {title:'Finalizar', payload:'QR_FINALIZAR'}]);
+        } else {
+          await toText(fromId, 'Te ayudo con la cotización. Antes necesito algunos datos básicos 🙂');
+          await nextStep(fromId);
+        }
+        return res.sendStatus(200);
       }
       if(wantsClose(text)){
         await toText(fromId,'¡Gracias por escribirnos! Si más adelante te surge algo, aquí estoy para ayudarte. 👋');
@@ -1415,33 +1433,62 @@ router.post('/wa/webhook', async (req,res)=>{
         else if(/\binvierno\b/i.test(text)) S(fromId).vars.campana='Invierno';
       }
 
-      if (asksPrice(text)){
-        await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+      if (asksPrice(text)) {
+        if (shouldShowLink(S(fromId))) {
+          await toText(fromId, `Para cotizar, por favor añade tus productos en el catálogo y toca *Enviar a WhatsApp*:\n${CATALOG_URL}`);
+        } else {
+          await toText(fromId, 'Con gusto cotizamos. Primero te pido unos datos y seguimos 👇');
+          await nextStep(fromId);
+        }
+        return res.sendStatus(200);
       }
 
       const prodByName = findProduct(text);
       if (prodByName) {
         const sNow = S(fromId);
-        const known = isKnownClient(sNow) || discoveryComplete(sNow);
+        const canLink = shouldShowLink(sNow);
 
-        if (!known) {
-          if (!sNow.greeted) {
-            await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
-            sNow.greeted = true; persistS(fromId);
-          }
+        if (!sNow.greeted) {
+          await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte! Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+          sNow.greeted = true; persistS(fromId);
+
           await showProduct(fromId, prodByName, {
             withLink: false,
             preface: `Con mucho gusto te envío la *ficha técnica* de *${prodByName.nombre}* 👇`
           });
+
           if (!sNow.asked?.nombre && sNow.pending !== 'nombre') {
             await askNombre(fromId);
             return res.sendStatus(200);
           }
-        } else {
-          // Cliente conocido
-          await showProduct(fromId, prodByName, { withLink: true });
+          await nextStep(fromId);
+          return res.sendStatus(200);
+        }
+
+        await showProduct(fromId, prodByName, {
+          withLink: canLink,
+          preface: canLink ? null : `Con mucho gusto te envío la *ficha técnica* de *${prodByName.nombre}* 👇`
+        });
+
+        if (!canLink && !sNow.asked?.nombre) {
+          await askNombre(fromId);
+          return res.sendStatus(200);
         }
       }
+                const isLeadMsg = !!leadData;
+    if(!s.greeted){
+      s.greeted = true;
+      persistS(fromId);
+      resetProductState(s);
+      if(!isLeadMsg){
+        await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte!, Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
+      }
+      if(!isLeadMsg && !s.asked.nombre){
+        await askNombre(fromId);
+        res.sendStatus(200);
+        return;
+      }
+    }
 
       try {
         const s2 = S(fromId);
