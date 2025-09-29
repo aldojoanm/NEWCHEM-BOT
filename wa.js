@@ -622,7 +622,7 @@ async function askCultivoLibre(to){
   const s=S(to); if (s.lastPrompt==='cultivo_text') return;
   await markPrompt(s,'cultivo_text'); s.pending='cultivo_text';
   persistS(to);
-  await toText(to,'Que *cultivo* manejas?');
+  await toText(to,'Qué *cultivo* manejas?');
 }
 async function askHectareas(to){
   const s=S(to); if (s.lastPrompt==='hectareas') return;
@@ -1134,7 +1134,7 @@ router.post('/wa/webhook', async (req,res)=>{
         } catch (e) {
           console.error('upsert WA_CLIENTES al finalizar error:', e);
         }
-        await toText(fromId, '¡Gracias por escribirnos! Te envió la *cotización en PDF*. Si requieres mas información, estamos a tu disposición.');
+        await toText(fromId, '¡Gracias por escribirnos! Te envío la *cotización en PDF*. Si requieres mas información, estamos a tu disposición.');
         await toText(fromId, 'Para volver a activar el asistente, por favor, escribe *Asistente New Chem*.');
         if (ADVISOR_WA_NUMBERS.length) {
           const txt = compileAdvisorAlert(S(fromId), fromId);
@@ -1244,7 +1244,8 @@ router.post('/wa/webhook', async (req,res)=>{
       const text = (msg.text?.body||'').trim();
       remember(fromId,'user',text);
 
-      const prodByIA = findByActiveIngredient(text);
+      const prodByIA   = findByActiveIngredient(text);
+      const prodByName = prodByIA ? null : findProduct(text);
       if (prodByIA) {
         const sNow = S(fromId);
         const canLink = shouldShowLink(sNow);
@@ -1315,8 +1316,9 @@ router.post('/wa/webhook', async (req,res)=>{
         return;
       }
 
-      if (!s.asked.nombre && s.pending !== 'nombre' && !leadData) {
-        if (!hasEarlyIntent(text)) {
+      if (!s.asked.nombre && s.pending !== 'nombre' && !leadData
+        && !prodByIA && !prodByName) {
+          if (!hasEarlyIntent(text)) {
           await askNombre(fromId);
           res.sendStatus(200);
           return;
@@ -1443,7 +1445,6 @@ router.post('/wa/webhook', async (req,res)=>{
         return res.sendStatus(200);
       }
 
-      const prodByName = findProduct(text);
       if (prodByName) {
         const sNow = S(fromId);
         const canLink = shouldShowLink(sNow);
