@@ -1316,12 +1316,15 @@ router.post('/wa/webhook', async (req,res)=>{
         return;
       }
 
-      if (!s.asked.nombre && s.pending !== 'nombre' && !leadData
-        && !prodByIA && !prodByName) {
-          if (!hasEarlyIntent(text)) {
+      if (!s.asked.nombre && s.pending !== 'nombre' && !leadData && !prodByIA && !prodByName) {
+        if (!hasEarlyIntent(text)) {
+          if (!s.greeted) {
+            s.greeted = true;
+            persistS(fromId);
+            await toText(fromId, PLAY?.greeting || '¡Hola! Soy el asistente virtual de *New Chem Agroquímicos*.');
+          }
           await askNombre(fromId);
-          res.sendStatus(200);
-          return;
+          return res.sendStatus(200);
         }
       }
 
@@ -1476,20 +1479,6 @@ router.post('/wa/webhook', async (req,res)=>{
           return res.sendStatus(200);
         }
       }
-                const isLeadMsg = !!leadData;
-    if(!s.greeted){
-      s.greeted = true;
-      persistS(fromId);
-      resetProductState(s);
-      if(!isLeadMsg){
-        await toText(fromId, PLAY?.greeting || '¡Qué gusto saludarte!, Soy el asistente virtual de *New Chem*. Estoy para ayudarte 🙂');
-      }
-      if(!isLeadMsg && !s.asked.nombre){
-        await askNombre(fromId);
-        res.sendStatus(200);
-        return;
-      }
-    }
 
       try {
         const s2 = S(fromId);
