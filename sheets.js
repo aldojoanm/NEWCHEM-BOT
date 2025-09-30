@@ -124,8 +124,13 @@ export async function getClientByPhone(phoneRaw = '') {
       const { dep, zona } = splitUbicacion(ubicacion);
       const updatedStr = (iUpd >= 0 ? row[iUpd] : '') || '';
       const campUpdStr = (iCampUpd >= 0 ? row[iCampUpd] : '') || '';
-      const updatedTs = Date.parse(updatedStr) || 0;
-      const campanaUpdatedTs = Date.parse(campUpdStr) || 0;
+      const toTs = (s='') => {
+        const iso = String(s).trim().replace(' ', 'T'); // "2025-09-30T15:20"
+        const ts  = Date.parse(iso);
+        return Number.isFinite(ts) ? ts : 0;
+      };
+      const updatedTs = toTs(updatedStr);
+      const campanaUpdatedTs = toTs(campUpdStr);
 
       return {
         telefono: tel,

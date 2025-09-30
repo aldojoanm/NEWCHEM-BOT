@@ -1123,12 +1123,12 @@ router.post('/wa/webhook', async (req,res)=>{
           if (rec.subzona) s.vars.subzona = rec.subzona;
           if (rec.cultivo) s.vars.cultivos = [rec.cultivo];
           if (rec.hectareas) s.vars.hectareas = rec.hectareas;
-          if (rec.campana) s.vars.campana = rec.campana;
-          if (rec.campanaUpdatedTs) s.meta.campanaUpdatedAt = rec.campanaUpdatedTs;
-          if (!rec.campana || needsCampanaRefresh(s)) {
-            s.asked.campana = false; 
+          if (rec.campana) {
+            s.vars.campana = rec.campana;
+          const ts = Number(rec.campanaUpdatedTs) > 0 ? Number(rec.campanaUpdatedTs) : Date.now();
+          s.meta.campanaUpdatedAt = ts;
           } else {
-            s.asked.campana = true; 
+            s.asked.campana = false;
           }
           s.asked = s.asked || {};
           if (s.profileName) s.asked.nombre = true;
