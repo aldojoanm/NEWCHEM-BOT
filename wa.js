@@ -645,6 +645,25 @@ const toList = (to, body, title, rows=[]) => {
   });
 };
 
+async function waUploadPDFSmart(pdfInfo, fallbackName='Cotizacion.pdf') {
+  const mime = 'application/pdf';
+  if (pdfInfo?.mediaId) return pdfInfo.mediaId;
+  if (pdfInfo?.path && fs.existsSync(pdfInfo.path)) {
+    return await waUploadMediaFromFile(pdfInfo.path, mime);
+  }
+  let buf = null;
+  if (pdfInfo?.buffer) buf = Buffer.isBuffer(pdfInfo.buffer) ? pdfInfo.buffer : Buffer.from(pdfInfo.buffer);
+  else if (pdfInfo?.base64) buf = Buffer.from(pdfInfo.base64, 'base64');
+  if (buf) {
+    const fname = (pdfInfo?.filename || fallbackName).replace(/[^\w\s\-.]/g,'_');
+    const tmp = path.join(TMP_DIR, fname);
+    fs.writeFileSync(tmp, buf);
+    try { return await waUploadMediaFromFile(tmp, mime); }
+    finally { try { fs.unlinkSync(tmp); } catch {} }
+  }
+  return null;
+}
+
 async function waUploadMediaFromFile(filePath, mimeHint){
   const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(WA_PHONE_ID)}/media`;
   const mime = mimeHint || guessMimeByExt(filePath);
@@ -1301,29 +1320,31 @@ router.post('/wa/webhook', async (req,res)=>{
             else console.warn('[ADVISOR] no se pudo enviar alerta a', advisor);
           }
           try {
-            let mediaId = pdfInfo?.mediaId || null;
-            let filename = pdfInfo?.filename ||
-              `Cotizacion_${(s.profileName || String(fromId)).replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
-            const caption = `Cotización — ${s.profileName || fromId}`;
-            if (!mediaId && pdfInfo?.path) {
-              mediaId = await waUploadMediaFromFile(pdfInfo.path, 'application/pdf');
+          const safeName = (s.profileName || String(fromId))
+            .replace(/[^\w\s\-.]/g, '')
+            .replace(/\s+/g, '_');
+
+          const filename = pdfInfo?.filename || `Cotizacion_${safeName}.pdf`;
+          const caption  = `Cotización — ${s.profileName || fromId}`;
+          const mediaId = await waUploadPDFSmart(pdfInfo, filename);
+
+          if (mediaId) {
+            for (const advisor of ADVISOR_WA_NUMBERS) {
+              const okDoc = await waSendQ(advisor, {
+                messaging_product: 'whatsapp',
+                to: advisor,
+                type: 'document',
+                document: { id: mediaId, filename, caption }
+              });
+              if (!okDoc) console.warn('[ADVISOR] PDF no enviado a', advisor);
             }
-            if (mediaId) {
-              for (const advisor of ADVISOR_WA_NUMBERS) {
-                const okDoc = await waSendQ(advisor, {
-                  messaging_product: 'whatsapp',
-                  to: advisor,
-                  type: 'document',
-                  document: { id: mediaId, filename, caption }
-                });
-                if (!okDoc) console.warn('[ADVISOR] PDF no enviado a', advisor);
-              }
-            } else {
-              console.warn('[ADVISOR] No se obtuvo mediaId ni path del PDF para reenviar al asesor.');
-            }
-          } catch (err) {
-            console.error('[ADVISOR] error al reenviar PDF:', err);
+          } else {
+            console.warn('[ADVISOR] No se obtuvo mediaId ni path del PDF para reenviar al asesor.');
           }
+        } catch (err) {
+          console.error('[ADVISOR] error al reenviar PDF:', err);
+        }
+
         }
         humanOn(fromId, 4);
         s._closedAt = Date.now();
