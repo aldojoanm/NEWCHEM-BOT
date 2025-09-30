@@ -92,24 +92,47 @@ const advFlow  = (id)=> ADVISOR_FLOWS.get(id) || null;
 const advSet   = (id, f)=> ADVISOR_FLOWS.set(id, f);
 const advReset = (id)=> ADVISOR_FLOWS.delete(id);
 
-// Parseo del bloque "NOMBRE/DEPARTAMENTO/ZONA" (tolerante a acentos y espacios)
 function parseAdvisorForm(text=''){
+  // 1) Intento con etiquetas (como ya tenías)
   const get = (label)=>{
-    const re = new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'im'); // línea con "LABEL: valor"
+    const re = new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'im');
     const m = text.match(re);
     return m ? m[1].trim() : null;
   };
-  const nombre = get('NOMBRE');
-  let depRaw   = get('DEPARTAMENTO');
-  let zonaRaw  = get('ZONA');
+  let nombre = get('NOMBRE');
+  let depRaw = get('DEPARTAMENTO');
+  let zonaRaw= get('ZONA');
 
-  // Normaliza departamento a uno de la lista, si se puede
+  // 2) Si falta algo, intento modo libre por líneas
+  if (!nombre || !depRaw || (!zonaRaw)) {
+    const lines = String(text)
+      .split(/\r?\n+/)
+      .map(l => l.replace(/^(nombre|departamento|zona)\s*:\s*/i,'').trim())
+      .filter(Boolean);
+
+    for (const ln of lines) {
+      // departamento conocido
+      const dep = detectDepartamento(ln);
+      if (!depRaw && dep) { depRaw = dep; continue; }
+
+      // nombre “parece nombre completo”
+      if (!nombre && looksLikeFullName(ln)) { nombre = canonName(ln); continue; }
+
+      // zona (si SCZ, valida subzona; si no, toma la línea como zona libre)
+      if (!zonaRaw) {
+        const maybeSub = detectSubzona(ln);
+        if (maybeSub) zonaRaw = maybeSub;
+        else if (!/^\d+(\.\d+)?$/.test(ln)) zonaRaw = title(ln); // zona libre
+      }
+    }
+  }
+
+  // Normalizaciones
   if (depRaw){
     const t = norm(depRaw);
     const canon = DEPARTAMENTOS.find(d => norm(d) === t);
     depRaw = canon || title(depRaw);
   }
-  // Zona para Santa Cruz: capitaliza; para otros, libre
   if (zonaRaw) zonaRaw = title(zonaRaw);
 
   return { nombre, departamento: depRaw, zona: zonaRaw };
@@ -149,7 +172,7 @@ async function advFinalize(fromId){
 
   // Genera PDF con los datos efímeros (no guarda sesión)
   let pdfInfo = null;
-  try { pdfInfo = await sendAutoQuotePDF(tmpId, s); }
+  try { pdfInfo = await sendAutoQuotePDF(null, s); }
   catch(e){ console.error('[ADV] PDF error', e); }
 
   // (Opcional) registra en Sheets como "asesor"

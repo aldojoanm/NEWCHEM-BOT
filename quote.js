@@ -5,13 +5,13 @@ import { buildQuoteFromSession } from './quote-engine.js';
 import { renderQuotePDF } from './quote-pdf.js';
 
 // ===== ENV =====
-const WA_TOKEN       = process.env.WHATSAPP_TOKEN || '';
-const WA_PHONE_ID    = process.env.WHATSAPP_PHONE_ID || '';
-const QUOTES_DIR     = path.resolve('./data/quotes');
-const MAX_CONCURRENCY= parseInt(process.env.QUOTE_MAX_CONCURRENCY || '3', 10);
-const DELETE_AFTER_MS= parseInt(process.env.QUOTE_DELETE_AFTER_MS || (10 * 60 * 1000), 10);
-const MAX_FILE_AGE_MS= parseInt(process.env.QUOTE_MAX_FILE_AGE_MS || (2 * 60 * 60 * 1000), 10);
-const MAX_FILES_KEEP = parseInt(process.env.QUOTE_MAX_FILES_KEEP || '200', 10);
+const WA_TOKEN        = process.env.WHATSAPP_TOKEN || '';
+const WA_PHONE_ID     = process.env.WHATSAPP_PHONE_ID || '';
+const QUOTES_DIR      = path.resolve('./data/quotes');
+const MAX_CONCURRENCY = parseInt(process.env.QUOTE_MAX_CONCURRENCY || '3', 10);
+const DELETE_AFTER_MS = parseInt(process.env.QUOTE_DELETE_AFTER_MS || (10 * 60 * 1000), 10);
+const MAX_FILE_AGE_MS = parseInt(process.env.QUOTE_MAX_FILE_AGE_MS || (2 * 60 * 60 * 1000), 10);
+const MAX_FILES_KEEP  = parseInt(process.env.QUOTE_MAX_FILES_KEEP || '200', 10);
 
 try { fs.mkdirSync(QUOTES_DIR, { recursive:true }); } catch {}
 
@@ -53,11 +53,18 @@ function _cleanupOldQuotes() {
     }
   }catch{}
 }
-setInterval(_cleanupOldQuotes, 30 * 60 * 1000).unref();
+setInterval(_cleanupOldQuotes, 30 * 60 * 1000).unref?.();
 
-// ===== WhatsApp helpers =====
+// ===== Helpers WhatsApp =====
+function hasWaCreds() {
+  return Boolean(WA_TOKEN && WA_PHONE_ID);
+}
+function isValidTo(to) {
+  return /^\+?\d{8,15}$/.test(String(to || '').trim());
+}
+
 async function waUploadMediaFromFile(filePath, mime='application/pdf'){
-  if (!WA_TOKEN || !WA_PHONE_ID) throw new Error('Faltan credenciales de WhatsApp (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID).');
+  if (!hasWaCreds()) return null; // sin credenciales, no subimos aquí
   const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(WA_PHONE_ID)}/media`;
   const buf = fs.readFileSync(filePath);
   const blob = new Blob([buf], { type: mime });
@@ -76,7 +83,7 @@ async function waUploadMediaFromFile(filePath, mime='application/pdf'){
 }
 
 async function waSendDocument(to, mediaId, filename, caption=''){
-  if (!WA_TOKEN || !WA_PHONE_ID) throw new Error('Faltan credenciales de WhatsApp (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID).');
+  if (!hasWaCreds()) return false;
   const url = `https://graph.facebook.com/v20.0/${encodeURIComponent(WA_PHONE_ID)}/messages`;
   const payload = {
     messaging_product:'whatsapp',
@@ -97,45 +104,72 @@ async function waSendDocument(to, mediaId, filename, caption=''){
 }
 
 /**
- * Genera y envía un PDF de cotización por WhatsApp (lee precios desde Sheets).
+ * Genera un PDF de cotización y, si corresponde, lo envía por WhatsApp.
  *
- * @param {string} to - Número destino (WhatsApp).
- * @param {object} session - Objeto de sesión/estado.
- * @returns {Promise<{ok:boolean, mediaId:string|null, path:string, filename:string, caption:string, quoteId?:string}>}
+ * @param {string|null} to  Número destino (WhatsApp). Si es null/ inválido, NO se envía.
+ * @param {object} session  Objeto de sesión/estado.
+ * @returns {Promise<{ok:boolean, sent:boolean, mediaId:string|null, path:string, filename:string, caption:string, quoteId?:string}>}
  */
 export async function sendAutoQuotePDF(to, session){
   await _acquire();
   try{
     const quote = await buildQuoteFromSession(session);
 
-    const cleanName = (s='') => String(s).normalize('NFD').replace(/\p{Diacritic}/gu,'').replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim().slice(0,80);
+    const cleanName = (s='') =>
+      String(s)
+        .normalize('NFD').replace(/\p{Diacritic}/gu,'')
+        .replace(/[\\/:*?"<>|]+/g,'')
+        .replace(/\s+/g,' ')
+        .trim()
+        .slice(0,80);
+
     const clienteName = cleanName(quote?.cliente?.nombre || session?.profileName || 'Cliente');
 
-    // Nombre interno (archivo en disco) con timestamp para evitar colisiones
+    // Archivo en disco (único por timestamp)
     const stamp = new Date().toISOString().replace(/[:.]/g,'-');
     const filenameFS = `${cleanName(`COT - ${clienteName} - ${stamp}`)}.pdf`;
 
     // Nombre visible para WhatsApp
     const filenameDisplay = (cleanName(`COT NEW CHEM AGROQUIMICOS - ${clienteName}`)).toUpperCase() + `.pdf`;
 
-    const outDir = path.resolve('./data/quotes');
+    const outDir = QUOTES_DIR;
     try { fs.mkdirSync(outDir, { recursive:true }); } catch {}
     const filePath = path.join(outDir, filenameFS);
 
+    // Render del PDF
     await renderQuotePDF(quote, filePath, { brand: 'New Chem Agroquímicos' });
 
-    const mediaId = await waUploadMediaFromFile(filePath, 'application/pdf');
-    if (!mediaId) throw new Error('No se pudo subir el PDF a WhatsApp.');
+    // Subimos a WhatsApp (si hay credenciales) para obtener mediaId reutilizable
+    let mediaId = null;
+    try { mediaId = await waUploadMediaFromFile(filePath, 'application/pdf'); }
+    catch (e) { console.error('upload to WA failed:', e); }
 
     const caption = `Cotización - ${clienteName}`;
-    const ok = await waSendDocument(to, mediaId, filenameDisplay, caption);
-    if (!ok) throw new Error('No se pudo enviar el PDF por WhatsApp.');
 
+    // Envío directo SOLO si 'to' parece válido
+    let sent = false;
+    if (isValidTo(to) && mediaId) {
+      try { sent = await waSendDocument(to, mediaId, filenameDisplay, caption); }
+      catch (e) { console.error('send to WA failed:', e); sent = false; }
+    } else if (isValidTo(to) && !mediaId) {
+      // Sin mediaId (p.ej. sin credenciales). Lo marcamos como no enviado; el caller puede subir y mandar.
+      sent = false;
+    }
+
+    // Limpieza diferida del archivo local
     if (DELETE_AFTER_MS > 0) {
       setTimeout(() => { try { fs.unlinkSync(filePath); } catch {} }, DELETE_AFTER_MS).unref?.();
     }
 
-    return { ok:true, mediaId, path:filePath, filename: filenameDisplay, caption, quoteId: quote?.id };
+    return {
+      ok: true,
+      sent,
+      mediaId: mediaId || null,
+      path: filePath,
+      filename: filenameDisplay,
+      caption,
+      quoteId: quote?.id
+    };
   } finally {
     _release();
   }
