@@ -1,15 +1,10 @@
-// src/sheets.js
 import 'dotenv/config';
 import { google } from 'googleapis';
 let _sheets;
 
-/* ===========================
-   Autorización / cliente API
-   =========================== */
 async function getSheets() {
   if (_sheets) return _sheets;
 
-  // 1) Credenciales
   let auth;
   const raw = process.env.GOOGLE_CREDENTIALS_JSON;
 
@@ -38,9 +33,6 @@ async function getSheets() {
   return _sheets;
 }
 
-/* ===============
-   Helpers comunes
-   =============== */
 const onlyDigits = (s='') => String(s).replace(/[^\d]/g, '');
 const pad2 = n => String(n).padStart(2, '0');
 const LOCAL_TZ = process.env.LOCAL_TZ || 'America/La_Paz';
@@ -75,7 +67,8 @@ const H_CLIENTS = {
   cultivo: 'Cultivo',
   hectareas: 'Hectáreas',
   campana: 'Campaña',
-  updated: 'Ultima_actualizacion'
+  updated: 'Ultima_actualizacion',
+  campana_updated_at: 'Campana_updated_at'
 };
 
 function headerIndexMap(headers = []) {
@@ -92,10 +85,6 @@ function splitUbicacion(ubi = '') {
   return { dep: (dep || '').trim(), zona: (zona || '').trim() };
 }
 
-/**
- * Busca un cliente por teléfono (solo dígitos).
- * Devuelve: { telefono, nombre, ubicacion, cultivo, hectareas, campana, dep, subzona } | null
- */
 export async function getClientByPhone(phoneRaw = '') {
   const sheets = await getSheets();
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
@@ -115,12 +104,14 @@ export async function getClientByPhone(phoneRaw = '') {
   const headers = rows[0];
   const idx = headerIndexMap(headers);
 
-  const iTel   = idx(H_CLIENTS.telefono);
-  const iNom   = idx(H_CLIENTS.nombre);
-  const iUbi   = idx(H_CLIENTS.ubicacion);
-  const iCult  = idx(H_CLIENTS.cultivo);
-  const iHa    = idx(H_CLIENTS.hectareas);
-  const iCamp  = idx(H_CLIENTS.campana);
+  const iTel     = idx(H_CLIENTS.telefono);
+  const iNom     = idx(H_CLIENTS.nombre);
+  const iUbi     = idx(H_CLIENTS.ubicacion);
+  const iCult    = idx(H_CLIENTS.cultivo);
+  const iHa      = idx(H_CLIENTS.hectareas);
+  const iCamp    = idx(H_CLIENTS.campana);
+  const iUpd     = idx(H_CLIENTS.updated);
+  const iCampUpd = idx(H_CLIENTS.campana_updated_at);
 
   if (iTel < 0) return null;
 
@@ -131,6 +122,11 @@ export async function getClientByPhone(phoneRaw = '') {
     if (tel === phone) {
       const ubicacion = row[iUbi] || '';
       const { dep, zona } = splitUbicacion(ubicacion);
+      const updatedStr = (iUpd >= 0 ? row[iUpd] : '') || '';
+      const campUpdStr = (iCampUpd >= 0 ? row[iCampUpd] : '') || '';
+      const updatedTs = Date.parse(updatedStr) || 0;
+      const campanaUpdatedTs = Date.parse(campUpdStr) || 0;
+
       return {
         telefono: tel,
         nombre: row[iNom] || '',
@@ -138,17 +134,16 @@ export async function getClientByPhone(phoneRaw = '') {
         cultivo: row[iCult] || '',
         hectareas: row[iHa] || '',
         campana: row[iCamp] || '',
-        dep, subzona: zona
+        dep, subzona: zona,
+        updatedTs,
+        campanaUpdatedTs
       };
     }
   }
+
   return null;
 }
 
-/**
- * Inserta o actualiza (por Teléfono) una fila en WA_CLIENTES.
- * record: { telefono, nombre, ubicacion, cultivo, hectareas, campana }
- */
 export async function upsertClientByPhone(record = {}) {
   const sheets = await getSheets();
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
@@ -157,7 +152,6 @@ export async function upsertClientByPhone(record = {}) {
   const telefono = onlyDigits(record.telefono || '');
   if (!telefono) return false;
 
-  // Leer hoja completa una vez
   const r = await sheets.spreadsheets.values.get({
     spreadsheetId,
     range: `${TAB_CLIENTS}!A1:Z10000`
@@ -165,10 +159,9 @@ export async function upsertClientByPhone(record = {}) {
   const rows = r.data.values || [];
   const headers = rows[0] || [
     H_CLIENTS.telefono, H_CLIENTS.nombre, H_CLIENTS.ubicacion,
-    H_CLIENTS.cultivo, H_CLIENTS.hectareas, H_CLIENTS.campana, H_CLIENTS.updated
+    H_CLIENTS.cultivo, H_CLIENTS.hectareas, H_CLIENTS.campana, H_CLIENTS.updated, H_CLIENTS.campana_updated_at,
   ];
 
-  // Asegurar encabezados si la hoja estaba vacía
   if (rows.length === 0) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -179,20 +172,20 @@ export async function upsertClientByPhone(record = {}) {
   }
 
   const idx = headerIndexMap(headers);
-  const iTel   = idx(H_CLIENTS.telefono);
-  const iNom   = idx(H_CLIENTS.nombre);
-  const iUbi   = idx(H_CLIENTS.ubicacion);
-  const iCult  = idx(H_CLIENTS.cultivo);
-  const iHa    = idx(H_CLIENTS.hectareas);
-  const iCamp  = idx(H_CLIENTS.campana);
-  const iUpd   = idx(H_CLIENTS.updated);
+  const iTel     = idx(H_CLIENTS.telefono);
+  const iNom     = idx(H_CLIENTS.nombre);
+  const iUbi     = idx(H_CLIENTS.ubicacion);
+  const iCult    = idx(H_CLIENTS.cultivo);
+  const iHa      = idx(H_CLIENTS.hectareas);
+  const iCamp    = idx(H_CLIENTS.campana);
+  const iUpd     = idx(H_CLIENTS.updated);
+  const iCampUpd = idx(H_CLIENTS.campana_updated_at);
 
   const now = new Date();
   const updated = formatDisplayDate(now);
   const rowOut = new Array(headers.length).fill('');
 
-  // Buscar fila existente
-  let foundRowIndex = -1; // índice absoluta en hoja (0-based)
+  let foundRowIndex = -1; 
   for (let i = 1; i < rows.length; i++) {
     const tel = onlyDigits((rows[i] || [])[iTel] || '');
     if (tel === telefono) { foundRowIndex = i; break; }
@@ -203,18 +196,23 @@ export async function upsertClientByPhone(record = {}) {
     for (let c = 0; c < headers.length; c++) rowOut[c] = prev[c] || '';
   }
 
-const campanaAuto = record.campana || campanaFromNow();
+  if (iTel  >= 0) rowOut[iTel]  = telefono;
+  if (iNom  >= 0) rowOut[iNom]  = record.nombre || rowOut[iNom] || '';
+  if (iUbi  >= 0) rowOut[iUbi]  = record.ubicacion || rowOut[iUbi] || '';
+  if (iCult >= 0) rowOut[iCult] = record.cultivo || rowOut[iCult] || '';
+  if (iHa   >= 0) rowOut[iHa]   = record.hectareas || rowOut[iHa] || '';
+  if (iUpd  >= 0) rowOut[iUpd]  = updated;
 
-if (iTel  >= 0) rowOut[iTel]  = telefono;
-if (iNom  >= 0) rowOut[iNom]  = record.nombre || rowOut[iNom] || '';
-if (iUbi  >= 0) rowOut[iUbi]  = record.ubicacion || rowOut[iUbi] || '';
-if (iCult >= 0) rowOut[iCult] = record.cultivo || rowOut[iCult] || '';
-if (iHa   >= 0) rowOut[iHa]   = record.hectareas || rowOut[iHa] || '';
-if (iCamp >= 0) rowOut[iCamp] = campanaAuto;  // ← siempre forzar campaña calculada
-if (iUpd  >= 0) rowOut[iUpd]  = updated;
+  if (iCamp >= 0) {
+    if ((record.campana || '').trim()) {
+      rowOut[iCamp] = record.campana.trim();
+      if (iCampUpd >= 0) rowOut[iCampUpd] = updated; 
+    } else {
+      rowOut[iCamp] = rowOut[iCamp] || '';
+    }
+  }
 
   if (foundRowIndex >= 0) {
-    // UPDATE fila existente (foundRowIndex es 0-based; +1 para 1-based de Sheets)
     const rowNumber = foundRowIndex + 1;
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -235,17 +233,13 @@ if (iUpd  >= 0) rowOut[iUpd]  = updated;
   return true;
 }
 
-/* =====================================
-   Construcción de filas para "Hoja 1"
-   (NO TOCAR lo existente)
-   ===================================== */
 function buildSummaryBullets(s, fechaDisplay) {
   const nombre = s?.profileName || s?.fullName || 'Cliente';
   const dep    = s?.vars?.departamento || 'ND';
   const zona   = s?.vars?.subzona || 'ND';
   const cultivo= (s?.vars?.cultivos && s.vars.cultivos[0]) || 'ND';
   const ha     = s?.vars?.hectareas || 'ND';
-  const camp   = s?.vars?.campana || campanaFromNow();
+  const camp   = s?.vars?.campana || '';
   const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
   const items = (carrito.length > 0) ? carrito : [{
     nombre: s?.vars?.last_product || '',
@@ -316,7 +310,7 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   const ubicacion = [dep, zona].filter(Boolean).join(' - ');
   const cultivo = (s?.vars?.cultivos && s.vars.cultivos[0]) || '';
   const hectareas = s?.vars?.hectareas || '';
-  const campana = s?.vars?.campana || campanaFromNow();
+  const camp = s?.vars?.campana || '';
 
   const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
   const items = (carrito.length > 0)
@@ -351,7 +345,7 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
     ubicacion,            // 3 Ubicación
     cultivo,              // 4 Cultivo
     String(hectareas||''),// 5 Hectáreas
-    campana,              // 6 Campaña
+    camp,                 // 6 Campaña
     productoCell,         // 7 Producto
     presentacionCell,     // 8 Presentacion
     cantidadCell,         // 9 Cantidad
@@ -363,7 +357,6 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
     calId                 // 15 calendar_event_id
   ];
 }
-
 
 export async function appendFromSession(s, fromPhone, estado = 'NUEVO') {
   const sheets = await getSheets();
@@ -384,10 +377,9 @@ export async function appendFromSession(s, fromPhone, estado = 'NUEVO') {
     requestBody: { values },
   });
 
-  return values[0][14]; // cotizacion_id
+  return values[0][14]; 
 }
 
-// === Campaña automática también en Sheets ===
 const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3')
   .split(',').map(n => +n.trim()).filter(Boolean);
 const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
@@ -407,10 +399,8 @@ function campanaFromNow(){
   return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
 }
 
-
 const TAB2_DEFAULT = process.env.SHEETS_TAB2_NAME || 'Hoja 2';
 
-// Normaliza fechas dd/mm/aaaa o dd-mm-aaaa -> dd/mm/aaaa
 function normalizeDateDMY(s=''){
   const t = String(s).trim();
   const m = t.match(/^([0-3]?\d)[\/\-]([0-1]?\d)[\/\-](\d{2,4})$/);
@@ -445,17 +435,13 @@ const WEEKDAY_MAP = {
 };
 
 const NORM = (s='') => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
-
-// Fecha "hoy/mañana/pasado mañana" o "viernes / este viernes / próximo viernes"
 function nextDateFromWords(text){
   const t = NORM(text);
 
-  // 1) hoy / mañana / pasado mañana
   if (/\bhoy\b/.test(t)) return dmyFromOffset(0);
   if (/\bmanana\b/.test(t)) return dmyFromOffset(1);
   if (/\bpasado\s+manana\b/.test(t)) return dmyFromOffset(2);
 
-  // 2) día de semana (opcional: este|proximo)
   const m = t.match(/\b(este|prox(?:imo)?)?\s*(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\b/);
   if (m){
     const qualifier = m[1] || '';
@@ -468,7 +454,6 @@ function nextDateFromWords(text){
   return '';
 }
 
-// Fecha "11 de octubre (2025)" | "11 oct" | "11-oct"
 function dateFromDayMonthWords(text){
   const t = NORM(text).replace(/-/g,' ');
   const m = t.match(/\b([0-3]?\d)\s*(?:de\s*)?([a-záéíóúñ]{3,12})\.?(?:\s*de\s*(\d{2,4}))?\b/);
@@ -483,7 +468,6 @@ function dateFromDayMonthWords(text){
   if (yRaw) {
     y = String(yRaw).length===2 ? (Number(yRaw)>=70 ? 1900+Number(yRaw) : 2000+Number(yRaw)) : Number(yRaw);
   } else {
-    // sin año: usa el más próximo (si ya pasó este año, pasa al siguiente)
     const { y:cy, m:cm, d:cd } = todayYMD();
     y = cy;
     if (mo < cm || (mo===cm && d < cd)) y = cy + 1;
@@ -491,7 +475,6 @@ function dateFromDayMonthWords(text){
   return `${pad2(d)}/${pad2(mo)}/${y}`;
 }
 
-// Helpers para "hoy" en zona LOCAL_TZ
 function todayYMD(){
   try{
     const parts = new Intl.DateTimeFormat('en-GB', {
@@ -518,17 +501,14 @@ function nextWeekdayDMY(targetDow, forceNextWeek=false){
   const todayDow = base.getUTCDay(); // 0..6
   let delta = (targetDow - todayDow + 7) % 7;
   if (delta === 0 && (forceNextWeek || true)) delta = 7;
-  // ↑ si escriben "viernes" y hoy es viernes, lo mandamos al siguiente viernes
   const tgt = new Date(base.getTime() + delta*24*60*60*1000);
   return `${pad2(tgt.getUTCDate())}/${pad2(tgt.getUTCMonth()+1)}/${pad2(tgt.getUTCFullYear())}`;
 }
 
-// Limpia y estandariza “placa”
 function normalizePlate(s=''){
   return String(s).toUpperCase().replace(/\s+/g,'').replace(/[^A-Z0-9\-]/g,'');
 }
 
-// helper para comparar nombres sin tildes/ruido
 const normName = (s='') => String(s)
   .normalize('NFD')
   .replace(/\p{Diacritic}/gu,'')
@@ -542,7 +522,7 @@ export function parseClientResponse(text = '', fallbackName = '') {
     razonSocial: '',
     nit: '',
     nombreChofer: '',
-    ciChofer: '',     // <— NUEVO
+    ciChofer: '', 
     placa: '',
     fechaRecojo: ''
   };
@@ -564,10 +544,8 @@ export function parseClientResponse(text = '', fallbackName = '') {
   const rePlaca  = /(placa(?:\s+del\s+veh[ií]culo)?|placa)\s*[:\-]\s*([A-Za-z0-9\-\s]{4,})/i;
   const reFecha  = /(fecha(?:\s+de)?\s*(recojo|retiro)?)(?:\s*\([^)]*\))?\s*[:\-]\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i;
 
-  // CI / Carnet de Identidad (acepta C.I., CI, cédula, etc.)
   const reCI     = /(c\.?\s*i\.?|ci|carnet(?:\s+de)?\s+identidad|cedula|c[eé]dula)(?:\s+(?:del|de)\s+chofer)?\s*[:\-]\s*([A-Za-z0-9.\-\/\s]+)/i;
 
-  // 1) Con títulos línea a línea
   for (const line of lines) {
     if (!out.nombreCliente) {
       const v = tryMatch(reNombre, line); if (v) out.nombreCliente = v;
@@ -592,9 +570,6 @@ export function parseClientResponse(text = '', fallbackName = '') {
     }
   }
 
-  // === Fallbacks de FECHA (sin título / formatos flexibles) ===
-
-  // 2) dd/mm(/aa|aaaa) o dd-mm(/aa|aaaa) en todo el texto
   if (!out.fechaRecojo) {
     const m0 = String(text).match(/([0-3]?\d)[\/\-]([01]?\d)(?:[\/\-](\d{2,4}))?/);
     if (m0) {
@@ -605,7 +580,6 @@ export function parseClientResponse(text = '', fallbackName = '') {
         const yy = m0[3];
         y = yy.length === 2 ? (Number(yy) >= 70 ? 1900 + Number(yy) : 2000 + Number(yy)) : Number(yy);
       } else {
-        // sin año → usa el más próximo
         const { y:cy, m:cm, d:cd } = todayYMD();
         y = (mo < cm || (mo === cm && d < cd)) ? cy + 1 : cy;
       }
@@ -613,32 +587,27 @@ export function parseClientResponse(text = '', fallbackName = '') {
     }
   }
 
-  // 3) "11 de octubre (2025)" | "11 oct"
   if (!out.fechaRecojo) {
     const dm = dateFromDayMonthWords(text);
     if (dm) out.fechaRecojo = dm;
   }
 
-  // 4) "hoy / mañana / pasado mañana" o "viernes / este viernes / próximo viernes"
   if (!out.fechaRecojo) {
     const w = nextDateFromWords(text);
     if (w) out.fechaRecojo = w;
   }
 
-  // 5) Variante con guion tras el título y paréntesis antes
   if (!out.fechaRecojo) {
     const m1 = String(text).match(/fecha(?:\s+de)?\s*(?:recojo|retiro)?(?:\s*\([^)]*\))?\s*-\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i);
     if (m1) out.fechaRecojo = normalizeDateDMY(m1[1]);
   }
 
-  // === Fallbacks de CI (sin título / variantes) ===
   if (!out.ciChofer) {
     // patrón “CI ... 123456 LP” o “carnet identidad 987654 SC”
     const mCI = String(text).match(/(?:c\.?\s*i\.?|ci|carnet(?:\s+de)?\s+identidad|cedula|c[eé]dula)[^0-9]{0,15}([0-9.\-\/\s]{5,})/i);
     if (mCI) out.ciChofer = onlyDigits(mCI[1]);
   }
 
-  // === Fallbacks de otros campos sin título ===
   const fbNorm = normName(fallbackName);
   const labeledHints = /(raz[oó]n|rs|nit|chofer|conductor|placa|fecha|cliente|carnet|ci|cedula|c[eé]dula)\s*[:\-]/i;
   const bare = lines.filter(l => !labeledHints.test(l));
@@ -655,7 +624,6 @@ export function parseClientResponse(text = '', fallbackName = '') {
     out.razonSocial = bare[0].trim();
   }
 
-  // Fallbacks directos por regex sueltos
   if (!out.razonSocial) {
     const m = text.match(/rs\s*[:\-]\s*([^\n;]+)/i) || text.match(/raz[oó]n\s*social\s*[:\-]\s*([^\n;]+)/i);
     if (m) out.razonSocial = m[1].trim();
@@ -665,19 +633,14 @@ export function parseClientResponse(text = '', fallbackName = '') {
     if (m) out.nit = m[1].trim();
   }
 
-  // Limpieza final
   out.razonSocial   = out.razonSocial.replace(/\s+/g, ' ').trim();
   out.nombreChofer  = out.nombreChofer.replace(/\s+/g, ' ').trim();
   out.nombreCliente = out.nombreCliente.replace(/\s+/g, ' ').trim();
-  out.ciChofer      = onlyDigits(out.ciChofer); // ← asegurar solo dígitos
+  out.ciChofer      = onlyDigits(out.ciChofer); 
 
   return out;
 }
 
-/**
- * Guarda en Hoja 2 con columnas:
- * Nombre Cliente | Razón Social | NIT | Nombre Chofer | CI Chofer | Placa | Fecha de Recojo
- */
 export async function appendBillingPickupRow({ nombreCliente, razonSocial, nit, nombreChofer, ciChofer, placa, fechaRecojo }){
   const sheets = await getSheets();
   const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
@@ -692,7 +655,7 @@ export async function appendBillingPickupRow({ nombreCliente, razonSocial, nit, 
     razonSocial   || '',
     nit           || '',
     nombreChofer  || '',
-    onlyDigits(ciChofer || ''), // ← normalizado a dígitos
+    onlyDigits(ciChofer || ''), 
     placa         || '',
     fechaRecojo   || ''
   ]];
@@ -714,30 +677,17 @@ export async function parseAndAppendClientResponse({ text, clientName }){
   return parsed;
 }
 
-/* =========================================================
-   NUEVO: Hoja 3 (PRECIOS) y Hoja 4 (HISTORIAL) — MISMA PLANILLA
-   ========================================================= */
-
 const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
 
-// Nombres por defecto (puedes cambiarlos con variables de entorno)
 const TAB3_PRECIOS = process.env.SHEETS_TAB3_NAME || 'Hoja 3';
 const TAB4_HIST    = process.env.SHEETS_TAB4_NAME || 'Hoja 4';
 
-// Celdas para control de versión y TC (tipo de cambio) en Hoja 3.
-// Como tu fila 1 ya es encabezado (A:F), guardamos estos metadatos fuera (por defecto J1/J2).
 const PRECIOS_VERSION_CELL = process.env.SHEETS_PRICES_VERSION_CELL || `${TAB3_PRECIOS}!J1`;
 const PRECIOS_RATE_CELL    = process.env.SHEETS_PRICES_RATE_CELL    || `${TAB3_PRECIOS}!J2`;
 
-/**
- * Lee precios desde Hoja 3 con encabezados:
- * A: TIPO | B: PRODUCTO | C: PRESENTACION | D: UNIDAD | E: PRECIO (USD) | F: PRECIO (BS)
- * Devuelve: { prices:[{categoria, sku, unidad, precio_usd, precio_bs}], version, rate }
- */
 export async function readPrices() {
   const sheets = await getSheets();
 
-  // 1) Leer versión y TC (si no existen, defaults)
   let version = 1;
   let rate = 6.96;
 
@@ -751,10 +701,8 @@ export async function readPrices() {
     version = Number(vRaw || 1);
     rate = Number(rRaw || 6.96);
   } catch {
-    // sin romper si no existen
   }
 
-  // 2) Leer tabla (desde fila 2 porque fila 1 son encabezados)
   const r = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${TAB3_PRECIOS}!A2:F`,
@@ -770,8 +718,6 @@ export async function readPrices() {
       const unidad = row[3] || '';
       const pUsd = Number((row[4] || '').toString().replace(',', '.')) || 0;
       const pBs  = Number((row[5] || '').toString().replace(',', '.')) || 0;
-
-      // UI consume sku unificado "PRODUCTO-PRESENTACION"
       const sku = presentacion ? `${producto}-${presentacion}` : producto;
 
       return {
@@ -786,14 +732,9 @@ export async function readPrices() {
   return { prices, version, rate };
 }
 
-/**
- * Escribe precios en Hoja 3 (sobrescribe desde A2:F) con control de versión.
- * expectedVersion: la versión que leyó el cliente; si no coincide con la actual → 409.
- */
 export async function writePrices(prices, expectedVersion) {
   const sheets = await getSheets();
 
-  // 1) Chequear versión actual
   let currentVersion = 1;
   try {
     const cur = await sheets.spreadsheets.values.get({
@@ -809,10 +750,8 @@ export async function writePrices(prices, expectedVersion) {
     throw err;
   }
 
-  // 2) Preparar valores para A2:F
   const body = {
     values: (prices || []).map(p => {
-      // sku -> (producto, presentacion) separados para tu encabezado
       let producto = '';
       let presentacion = '';
       const sku = String(p.sku || '').trim();
@@ -825,17 +764,16 @@ export async function writePrices(prices, expectedVersion) {
         presentacion = '';
       }
       return [
-        p.categoria || '',       // A: TIPO
-        producto || '',          // B: PRODUCTO
-        presentacion || '',      // C: PRESENTACION
-        p.unidad || '',          // D: UNIDAD
+        p.categoria || '',         // A: TIPO
+        producto || '',            // B: PRODUCTO
+        presentacion || '',        // C: PRESENTACION
+        p.unidad || '',            // D: UNIDAD
         Number(p.precio_usd || 0), // E: PRECIO (USD)
         Number(p.precio_bs || 0)   // F: PRECIO (BS)
       ];
     }),
   };
 
-  // 3) Limpiar rango y reescribir
   await sheets.spreadsheets.values.clear({
     spreadsheetId: SPREADSHEET_ID,
     range: `${TAB3_PRECIOS}!A2:F`,
@@ -850,7 +788,6 @@ export async function writePrices(prices, expectedVersion) {
     });
   }
 
-  // 4) Incrementar versión
   const nextVersion = Number(currentVersion) + 1;
   await sheets.spreadsheets.values.update({
     spreadsheetId: SPREADSHEET_ID,
@@ -862,7 +799,6 @@ export async function writePrices(prices, expectedVersion) {
   return nextVersion;
 }
 
-/** Lee el tipo de cambio (TC) desde Hoja 3 (celda PRECIOS_RATE_CELL). */
 export async function readRate() {
   const sheets = await getSheets();
   try {
@@ -876,7 +812,6 @@ export async function readRate() {
   }
 }
 
-/** Escribe el tipo de cambio (TC) en Hoja 3 (celda PRECIOS_RATE_CELL). */
 export async function writeRate(rate) {
   const sheets = await getSheets();
   await sheets.spreadsheets.values.update({
@@ -888,14 +823,6 @@ export async function writeRate(rate) {
   return true;
 }
 
-/* =============================
-   Hoja 4: HISTORIAL de mensajes
-   ============================= */
-
-/**
- * Append de mensaje:
- * Columnas: wa_id | nombre | ts_iso | role | content
- */
 export async function appendMessage({ waId, name, ts, role, content }) {
   const sheets = await getSheets();
   const row = [
@@ -914,10 +841,6 @@ export async function appendMessage({ waId, name, ts, role, content }) {
   });
 }
 
-/**
- * Lee historial (últimos N días) para un wa_id.
- * Retorna [{wa_id,name,ts,role,content}] ordenado por ts asc.
- */
 export async function historyForIdLastNDays(waId, days = 7) {
   const sheets = await getSheets();
   const r = await sheets.spreadsheets.values.get({
@@ -927,7 +850,6 @@ export async function historyForIdLastNDays(waId, days = 7) {
   const since = Date.now() - days * 24 * 60 * 60 * 1000;
   const rows = r.data.values || [];
 
-  // Si hay encabezado en fila 1, los datos empiezan en fila 2
   const data = rows.slice(1);
 
   return data
@@ -946,10 +868,6 @@ export async function historyForIdLastNDays(waId, days = 7) {
     .sort((a, b) => a.ts - b.ts);
 }
 
-/**
- * Resúmenes para Inbox (últimos N días).
- * Retorna [{ id, name, last, lastTs }]
- */
 export async function summariesLastNDays(days = 7) {
   const sheets = await getSheets();
   const r = await sheets.spreadsheets.values.get({
@@ -1034,7 +952,7 @@ export async function pruneExpiredConversations(days = 7) {
   }
   return { kept: keepRows.length, removed };
 }
-// Reemplaza tus no-ops del final de src/sheets.js por esto:
+
 export async function appendChatHistoryRow({ wa_id, nombre, ts_iso, role, content }) {
   return appendMessage({ waId: wa_id, name: nombre, ts: ts_iso, role, content });
 }

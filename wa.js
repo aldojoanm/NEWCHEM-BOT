@@ -86,6 +86,99 @@ function guessMimeByExt(filePath='') {
   return map[ext] || 'application/octet-stream';
 }
 /* =============================================== */
+// ===== Flujo efímero del ASESOR (no persiste en disco) =====
+const ADVISOR_FLOWS = new Map(); // fromId -> { step:'ask_all', s }
+const advFlow  = (id)=> ADVISOR_FLOWS.get(id) || null;
+const advSet   = (id, f)=> ADVISOR_FLOWS.set(id, f);
+const advReset = (id)=> ADVISOR_FLOWS.delete(id);
+
+// Parseo del bloque "NOMBRE/DEPARTAMENTO/ZONA" (tolerante a acentos y espacios)
+function parseAdvisorForm(text=''){
+  const get = (label)=>{
+    const re = new RegExp(`^\\s*${label}\\s*:\\s*(.+)$`, 'im'); // línea con "LABEL: valor"
+    const m = text.match(re);
+    return m ? m[1].trim() : null;
+  };
+  const nombre = get('NOMBRE');
+  let depRaw   = get('DEPARTAMENTO');
+  let zonaRaw  = get('ZONA');
+
+  // Normaliza departamento a uno de la lista, si se puede
+  if (depRaw){
+    const t = norm(depRaw);
+    const canon = DEPARTAMENTOS.find(d => norm(d) === t);
+    depRaw = canon || title(depRaw);
+  }
+  // Zona para Santa Cruz: capitaliza; para otros, libre
+  if (zonaRaw) zonaRaw = title(zonaRaw);
+
+  return { nombre, departamento: depRaw, zona: zonaRaw };
+}
+
+async function advStart(fromId, parsedCart){
+  const s = {
+    greeted: true,
+    stage: 'checkout',
+    pending: null,
+    asked: {},
+    vars: {
+      departamento:null, subzona:null,
+      cultivos:[], hectareas:null,
+      campana: currentCampana(),
+      cart: parsedCart.items || []
+    },
+    profileName: null,
+    meta: {}
+  };
+  advSet(fromId, { step: 'ask_all', s });
+
+  await toText(fromId,
+`🧑‍💼 *Cotización para tercero detectada*.
+
+Por favor responde *en un solo mensaje* con este formato:
+
+NOMBRE: Juan Pérez
+DEPARTAMENTO: Santa Cruz
+ZONA: Norte`);
+}
+
+async function advFinalize(fromId){
+  const flow = advFlow(fromId); if(!flow) return;
+  const s = flow.s;
+  const tmpId = `adv_${fromId}_${Date.now()}`;
+
+  // Genera PDF con los datos efímeros (no guarda sesión)
+  let pdfInfo = null;
+  try { pdfInfo = await sendAutoQuotePDF(tmpId, s); }
+  catch(e){ console.error('[ADV] PDF error', e); }
+
+  // (Opcional) registra en Sheets como "asesor"
+  try {
+    const cotId = await appendFromSession(s, tmpId, 'asesor');
+    s.vars.cotizacion_id = cotId;
+  } catch(e){ console.error('[ADV] appendFromSession', e); }
+
+  await toText(fromId, '✅ ¡Listo! Te envío la *cotización en PDF* del cliente.');
+  try{
+    let mediaId = pdfInfo?.mediaId || null;
+    let filename = pdfInfo?.filename ||
+      `Cotizacion_${(s.profileName || 'Cliente').replace(/[^\w\s\-.]/g,'').replace(/\s+/g,'_')}.pdf`;
+    if (!mediaId && pdfInfo?.path) {
+      mediaId = await waUploadMediaFromFile(pdfInfo.path, 'application/pdf');
+    }
+    if (mediaId){
+      await waSendQ(fromId, {
+        messaging_product:'whatsapp', to: fromId, type:'document',
+        document:{ id: mediaId, filename, caption: `Cotización — ${s.profileName || 'Cliente'}` }
+      });
+    } else {
+      await toText(fromId, '⚠️ No pude adjuntar el PDF (mediaId/path vacío).');
+    }
+  }catch(e){ console.error('[ADV] enviar PDF', e); }
+
+  advReset(fromId); // se borra el flujo efímero
+}
+
 
 function monthInTZ(tz = TZ){
   try{
@@ -280,6 +373,12 @@ const SESSION_TTL_DAYS = parseInt(process.env.SESSION_TTL_DAYS || '7', 10);
 const SESSION_TTL_MS   = SESSION_TTL_DAYS * 24 * 60 * 60 * 1000;
 const SESSION_DIR = path.resolve('./data/sessions');
 fs.mkdirSync(SESSION_DIR, { recursive: true });
+
+const SIX_MONTHS_MS = 183 * 24 * 60 * 60 * 1000;
+function needsCampanaRefresh(s){
+  const last = Number(s?.meta?.campanaUpdatedAt || 0);
+  return !s?.vars?.campana || (Date.now() - last) > SIX_MONTHS_MS;
+}
 
 const sessions = new Map();
 const sessionTouched = new Map();
@@ -741,7 +840,7 @@ function summaryText(s){
   const zona   = s.vars.subzona || 'ND';
   const cultivo= s.vars.cultivos?.[0] || 'ND';
   const ha     = s.vars.hectareas || 'ND';
-  const camp   = s.vars.campana || currentCampana();  // ← auto
+  const camp   = s.vars.campana || 'ND';
 
   let linesProductos = [];
   if ((s.vars.cart||[]).length){
@@ -811,8 +910,10 @@ async function nextStep(to){
       return;
     }
 
-    // Campaña: siempre se autocalcula, nunca se pregunta
-    s.vars.campana = currentCampana();
+    if (needsCampanaRefresh(s)) {
+      if (stale('campana') || s.lastPrompt !== 'campana') return askCampana(to);
+      return;
+    }
 
     await askCategory(to);
     return;
@@ -904,7 +1005,7 @@ function compileAdvisorAlert(s, customerWa){
   const dep     = s.vars.departamento || 'ND';
   const zona    = s.vars.subzona || 'ND';
   const cultivo = s.vars.cultivos?.[0] || 'ND';
-  const camp    = s.vars.campana || currentCampana(); // ← auto
+  const camp    = s.vars.campana || 'ND';
   const prod    = (s.vars.cart?.[0]?.nombre || '—');
   const cant    = (s.vars.cart?.[0]?.cantidad || '—');
   const baseChat     = `https://wa.me/${customerWa}`;
@@ -947,16 +1048,14 @@ router.post('/wa/webhook', async (req,res)=>{
     if (seenWamid(msg.id)) { return res.sendStatus(200); }
 
     const s = S(fromId);
-    s.vars = s.vars || {};
-    s.vars.campana = currentCampana();
-    persistS(fromId);
     s.meta = s.meta || {};
     if (msg.id) { s.meta.last_wamid = msg.id; persistS(fromId); }
 
     const textRaw = (msg.type==='text' ? (msg.text?.body || '').trim() : '');
     const leadData = (msg.type === 'text') ? parseMessengerLead(textRaw) : null;
     const parsedCart = parseCartFromText(textRaw);
-    if (parsedCart) {
+
+    if (parsedCart && !isAdvisor(fromId)) {
       const s0 = S(fromId);
       s0.vars.cart = parsedCart.items || [];
       s0.pending = null;
@@ -982,7 +1081,13 @@ router.post('/wa/webhook', async (req,res)=>{
           if (rec.subzona) s.vars.subzona = rec.subzona;
           if (rec.cultivo) s.vars.cultivos = [rec.cultivo];
           if (rec.hectareas) s.vars.hectareas = rec.hectareas;
-          if (rec.campana)  s.vars.campana  = rec.campana;
+          if (rec.campana) s.vars.campana = rec.campana;
+          if (rec.campanaUpdatedTs) s.meta.campanaUpdatedAt = rec.campanaUpdatedTs;
+          if (!rec.campana || needsCampanaRefresh(s)) {
+            s.asked.campana = false;
+          } else {
+            s.asked.campana = true;
+          }
           s.asked = s.asked || {};
           if (s.profileName) s.asked.nombre = true;
           if (s.vars.departamento) s.asked.departamento = true;
@@ -1050,11 +1155,42 @@ router.post('/wa/webhook', async (req,res)=>{
     }
 
     if (isAdvisor(fromId)) {
-      console.log('[HOOK] Mensaje del asesor — abriendo ventana 24h');
       advisorWindowTs = Date.now();
-      persistS(fromId);
+      if (parsedCart) {
+        await advStart(fromId, parsedCart);
+        return res.sendStatus(200);
+      }
+      const flow = advFlow(fromId);
+      if (flow && msg.type === 'text') {
+        const text = (msg.text?.body || '').trim();
+        if (flow.step === 'ask_all') {
+          const { nombre, departamento, zona } = parseAdvisorForm(text);
+          const missing = [];
+          if (!nombre)       missing.push('NOMBRE');
+          if (!departamento) missing.push('DEPARTAMENTO');
+          if (departamento === 'Santa Cruz' && !zona) missing.push('ZONA');
+
+          if (missing.length){
+            await toText(fromId,
+              'Faltó completar: *' + missing.join(', ') + '*.\n' +
+              'Por favor reenvía *en un solo mensaje* con este formato:\n\n' +
+              'NOMBRE: Juan Pérez\nDEPARTAMENTO: Santa Cruz\nZONA: Norte'
+            );
+            return res.sendStatus(200);
+          }
+
+          flow.s.profileName        = canonName(nombre);
+          flow.s.vars.departamento  = departamento;
+          flow.s.vars.subzona       = zona || flow.s.vars.subzona || 'ND';
+          advSet(fromId, { ...flow, step: 'finalizing' });
+          await advFinalize(fromId);
+          return res.sendStatus(200);
+        }
+      }
+
       return res.sendStatus(200);
     }
+
 
     const referral = msg?.referral;
     if (referral && !s.meta.referralHandled){
@@ -1146,7 +1282,7 @@ router.post('/wa/webhook', async (req,res)=>{
             ubicacion: [s?.vars?.departamento || '', s?.vars?.subzona || ''].filter(Boolean).join(' - '),
             cultivo: (s?.vars?.cultivos && s.vars.cultivos[0]) || '',
             hectareas: s?.vars?.hectareas || '',
-            campana: currentCampana() 
+            campana: s?.vars?.campana || '',
           };
           await upsertClientByPhone(rec);
         } catch (e) {
@@ -1449,11 +1585,6 @@ router.post('/wa/webhook', async (req,res)=>{
           await toText(fromId, 'Por favor, *elige una opción del listado* para continuar.');
           await askCultivo(fromId); res.sendStatus(200); return;
         }
-      }
-
-      if(!S(fromId).vars.campana){
-        if(/\bverano\b/i.test(text)) S(fromId).vars.campana='Verano';
-        else if(/\binvierno\b/i.test(text)) S(fromId).vars.campana='Invierno';
       }
 
       if (asksPrice(text)) {
