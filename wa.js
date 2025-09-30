@@ -1084,9 +1084,9 @@ router.post('/wa/webhook', async (req,res)=>{
           if (rec.campana) s.vars.campana = rec.campana;
           if (rec.campanaUpdatedTs) s.meta.campanaUpdatedAt = rec.campanaUpdatedTs;
           if (!rec.campana || needsCampanaRefresh(s)) {
-            s.asked.campana = false;
+            s.asked.campana = false; 
           } else {
-            s.asked.campana = true;
+            s.asked.campana = true; 
           }
           s.asked = s.asked || {};
           if (s.profileName) s.asked.nombre = true;
@@ -1094,7 +1094,6 @@ router.post('/wa/webhook', async (req,res)=>{
           if (s.vars.subzona) s.asked.subzona = true;
           if (s.vars.cultivos?.length) s.asked.cultivo = true;
           if (s.vars.hectareas) s.asked.hectareas = true;
-          if (s.vars.campana) s.asked.campana = true;
           s.greeted = true;
           persistS(fromId);
           if (s.profileName) {
@@ -1190,7 +1189,6 @@ router.post('/wa/webhook', async (req,res)=>{
 
       return res.sendStatus(200);
     }
-
 
     const referral = msg?.referral;
     if (referral && !s.meta.referralHandled){
@@ -1385,12 +1383,20 @@ router.post('/wa/webhook', async (req,res)=>{
         }
         res.sendStatus(200); return;
       }
-      if(/^CAMP_/.test(id)){
+      if (/^CAMP_/.test(id)) {
         const code = id.replace('CAMP_','').toLowerCase();
-        if(code==='verano') s.vars.campana='Verano';
-        else if(code==='invierno') s.vars.campana='Invierno';
-        s.pending=null; s.lastPrompt=null; persistS(fromId);
-        await nextStep(fromId); res.sendStatus(200); return;
+        if (code === 'verano')   s.vars.campana = 'Verano';
+        else if (code === 'invierno') s.vars.campana = 'Invierno';
+        s.meta = s.meta || {};
+        s.meta.campanaUpdatedAt = Date.now();
+        s.asked.campana = true;
+
+        s.pending = null;
+        s.lastPrompt = null;
+        persistS(fromId);
+        await nextStep(fromId);
+        res.sendStatus(200);
+        return;
       }
     }
 
