@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url';
 import waRouter from './wa.js';
 import messengerRouter from './index.js';
 import pricesRouter from './prices.js';
+import { readPricesPersonal } from './sheets.js';
+
 
 // ========= Sheets (SIN carpeta /src) =========
 import {
@@ -291,6 +293,33 @@ function currentCampana(){               // ← "Verano" o "Invierno" según mes
   const m = monthInTZ(TZ);
   return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
 }
+
+app.get('/api/catalog-personal', async (req, res) => {
+  try {
+    const { prices = [], rate = 6.96 } = await readPricesPersonal();
+
+    // Agrupa por nombre para generar "variantes" (presentaciones)
+    const byName = new Map();
+    for (const p of prices) {
+      const key = p.nombre.trim();
+      if (!byName.has(key)) {
+        byName.set(key, { nombre: key, categoria: p.categoria || '', variantes: [] });
+      }
+      byName.get(key).variantes.push({
+        presentacion: p.presentacion || '',
+        unidad: p.unidad || '',
+        precio_usd: p.precio_usd || 0,
+        precio_bs:  p.precio_bs  || 0,
+      });
+    }
+
+    const items = [...byName.values()];
+    res.json({ items, rate });
+  } catch (e) {
+    console.error('catalog-personal error:', e);
+    res.status(500).json({ error: 'No se pudo cargar el catálogo personal' });
+  }
+});
 
 // ========= Arranque =========
 const PORT = process.env.PORT || 3000;

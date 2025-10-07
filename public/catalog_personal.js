@@ -288,7 +288,7 @@ function buildWaText() {
 
   const t = totals();
   return [
-    'PEDIDO NEW CHEM PRIVADO', // <<< diferencia clave
+    'CATALOGO PERSONAL - NEW CHEM AGROQUIMICOS',
     ...lines,
     `TOTAL USD: ${fmt2(t.usd)}`,
     `TOTAL BS: ${fmt2(t.bs)}`

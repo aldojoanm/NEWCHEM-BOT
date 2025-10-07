@@ -36,6 +36,54 @@ async function getSheets() {
 const onlyDigits = (s='') => String(s).replace(/[^\d]/g, '');
 const pad2 = n => String(n).padStart(2, '0');
 const LOCAL_TZ = process.env.LOCAL_TZ || 'America/La_Paz';
+// --- NUEVO: pestaña exclusiva para catálogo personal
+const TAB3_PRECIOS_PERSONAL = process.env.SHEETS_TAB3_PERSONAL_NAME || 'PRECIOS_PERSONAL';
+const PERSONAL_VERSION_CELL  = `${TAB3_PRECIOS_PERSONAL}!J1`;
+const PERSONAL_RATE_CELL     = `${TAB3_PRECIOS_PERSONAL}!J2`;
+
+/**
+ * Lee solo la hoja PRECIOS_PERSONAL (A:F).
+ * Devuelve { prices, version, rate } con los mismos campos usados en server.
+ */
+export async function readPricesPersonal() {
+  const sheets = await getSheets();
+  const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
+
+  let version = 1;
+  let rate = 6.96;
+  try {
+    const meta = await sheets.spreadsheets.values.batchGet({
+      spreadsheetId,
+      ranges: [PERSONAL_VERSION_CELL, PERSONAL_RATE_CELL],
+    });
+    const vRaw = meta.data.valueRanges?.[0]?.values?.[0]?.[0];
+    const rRaw = meta.data.valueRanges?.[1]?.values?.[0]?.[0];
+    version = Number(vRaw || 1);
+    rate = Number((rRaw ?? '').toString().replace(',', '.')) || 6.96;
+  } catch { /* meta opcional */ }
+
+  const r = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: `${TAB3_PRECIOS_PERSONAL}!A2:F`, // TIPO, PRODUCTO, PRESENTACION, UNIDAD, USD, BS
+  });
+
+  const rows = r.data.values || [];
+  const prices = rows
+    .filter(row => row && (row[0]||row[1]||row[2]||row[3]||row[4]||row[5]))
+    .map(row => {
+      const tipo         = row[0] || '';
+      const producto     = row[1] || '';
+      const presentacion = row[2] || '';
+      const unidad       = row[3] || '';
+      const pUsd         = Number((row[4] || '').toString().replace(',', '.')) || 0;
+      const pBs          = Number((row[5] || '').toString().replace(',', '.')) || 0;
+      const sku          = presentacion ? `${producto}-${presentacion}` : producto;
+      return { categoria: tipo, nombre: producto, presentacion, unidad, precio_usd: pUsd, precio_bs: pBs, sku };
+    });
+
+  return { prices, version, rate };
+}
+
 
 function formatDisplayDate(d){
   try{
