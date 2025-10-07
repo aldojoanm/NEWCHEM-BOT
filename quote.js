@@ -110,7 +110,7 @@ async function waSendDocument(to, mediaId, filename, caption=''){
  * @param {object} session  Objeto de sesión/estado.
  * @returns {Promise<{ok:boolean, sent:boolean, mediaId:string|null, path:string, filename:string, caption:string, quoteId?:string}>}
  */
-export async function sendAutoQuotePDF(to, session){
+export async function sendAutoQuotePDF(to, session, opts = {}){
   await _acquire();
   try{
     const quote = await buildQuoteFromSession(session, opts);
