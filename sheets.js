@@ -1,8 +1,49 @@
+// sheets.js (ESM) — versión unificada y sin identificadores duplicados
 import 'dotenv/config';
 import { google } from 'googleapis';
-let _sheets;
 
-async function getSheets() {
+/* ========== CONFIG GLOBAL ========== */
+const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID; // <-- ÚNICA definición
+if (!SPREADSHEET_ID) {
+  console.error('[sheets] Falta SHEETS_SPREADSHEET_ID en el entorno.');
+}
+
+const LOCAL_TZ = process.env.LOCAL_TZ || 'America/La_Paz';
+
+/* Hoja de clientes (WA_CLIENTES) */
+const TAB_CLIENTS = process.env.SHEETS_TAB_CLIENTS_NAME || 'WA_CLIENTES';
+const H_CLIENTS = {
+  telefono: 'Teléfono',
+  nombre: 'Nombre Completo',
+  ubicacion: 'Ubicación',
+  cultivo: 'Cultivo',
+  hectareas: 'Hectáreas',
+  campana: 'Campaña',
+  updated: 'Ultima_actualizacion',
+  campana_updated_at: 'Campana_updated_at'
+};
+
+/* Hojas de precios / historial */
+const TAB3_PRECIOS        = process.env.SHEETS_TAB3_NAME         || 'Hoja 3';   // base
+const TAB3_PRECIOS_PUBLIC = process.env.SHEETS_TAB3_NAME         || 'Hoja 3';   // público (puede coincidir)
+const TAB3_PRECIOS_PRIVATE= process.env.SHEETS_TAB3_PRIVATE_NAME || 'PRECIOS_NUEVOS';
+const TAB4_HIST           = process.env.SHEETS_TAB4_NAME         || 'Hoja 4';
+
+const PRECIOS_VERSION_CELL = process.env.SHEETS_PRICES_VERSION_CELL || `${TAB3_PRECIOS}!J1`;
+const PRECIOS_RATE_CELL    = process.env.SHEETS_PRICES_RATE_CELL    || `${TAB3_PRECIOS}!J2`;
+
+/* Hoja 2 para anexos de facturación/recojo */
+const TAB2_DEFAULT = process.env.SHEETS_TAB2_NAME || 'Hoja 2';
+
+/* Campañas */
+const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
+  .split(',').map(n => +n.trim()).filter(Boolean);
+
+/* ========== CLIENT GOOGLE SHEETS ========== */
+let _sheets;
+export async function getSheets() {
   if (_sheets) return _sheets;
 
   let auth;
@@ -11,6 +52,10 @@ async function getSheets() {
   try {
     if (raw && raw.trim()) {
       const creds = JSON.parse(raw);
+      // Fix para llaves con \n escapado
+      if (creds.private_key?.includes('\\n')) {
+        creds.private_key = creds.private_key.replace(/\\n/g, '\n');
+      }
       auth = new google.auth.GoogleAuth({
         credentials: creds,
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
@@ -24,7 +69,7 @@ async function getSheets() {
       throw new Error('No hay credenciales de Google. Define GOOGLE_CREDENTIALS_JSON o GOOGLE_APPLICATION_CREDENTIALS.');
     }
   } catch (e) {
-    console.error('[sheets] Error leyendo GOOGLE_CREDENTIALS_JSON:', e?.message || e);
+    console.error('[sheets] Error leyendo credenciales:', e?.message || e);
     throw e;
   }
 
@@ -33,9 +78,9 @@ async function getSheets() {
   return _sheets;
 }
 
+/* ========== HELPERS GENERALES ========== */
 const onlyDigits = (s='') => String(s).replace(/[^\d]/g, '');
 const pad2 = n => String(n).padStart(2, '0');
-const LOCAL_TZ = process.env.LOCAL_TZ || 'America/La_Paz';
 
 function formatDisplayDate(d){
   try{
@@ -51,25 +96,12 @@ function formatDisplayDate(d){
   }catch{
     const yy = d.getFullYear();
     const mm = pad2(d.getMonth()+1);
-    const dd = d.getDate();
-    const hh = d.getHours();
-    const mi = d.getMinutes();
+    const dd = pad2(d.getDate());
+    const hh = pad2(d.getHours());
+    const mi = pad2(d.getMinutes());
     return `${yy}-${mm}-${dd} ${hh}:${mi}`;
   }
 }
-
-const TAB_CLIENTS = process.env.SHEETS_TAB_CLIENTS_NAME || 'WA_CLIENTES';
-
-const H_CLIENTS = {
-  telefono: 'Teléfono',
-  nombre: 'Nombre Completo',
-  ubicacion: 'Ubicación',
-  cultivo: 'Cultivo',
-  hectareas: 'Hectáreas',
-  campana: 'Campaña',
-  updated: 'Ultima_actualizacion',
-  campana_updated_at: 'Campana_updated_at'
-};
 
 function headerIndexMap(headers = []) {
   const map = {};
@@ -85,16 +117,18 @@ function splitUbicacion(ubi = '') {
   return { dep: (dep || '').trim(), zona: (zona || '').trim() };
 }
 
+const NORM = (s='') => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+
+/* ========== CLIENTES (WA_CLIENTES) ========== */
 export async function getClientByPhone(phoneRaw = '') {
   const sheets = await getSheets();
-  const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('Falta SHEETS_SPREADSHEET_ID');
+  if (!SPREADSHEET_ID) throw new Error('Falta SHEETS_SPREADSHEET_ID');
 
   const phone = onlyDigits(phoneRaw);
   if (!phone) return null;
 
   const r = await sheets.spreadsheets.values.get({
-    spreadsheetId,
+    spreadsheetId: SPREADSHEET_ID,
     range: `${TAB_CLIENTS}!A1:Z10000`
   });
 
@@ -125,7 +159,7 @@ export async function getClientByPhone(phoneRaw = '') {
       const updatedStr = (iUpd >= 0 ? row[iUpd] : '') || '';
       const campUpdStr = (iCampUpd >= 0 ? row[iCampUpd] : '') || '';
       const toTs = (s='') => {
-        const iso = String(s).trim().replace(' ', 'T'); // "2025-09-30T15:20"
+        const iso = String(s).trim().replace(' ', 'T');
         const ts  = Date.parse(iso);
         return Number.isFinite(ts) ? ts : 0;
       };
@@ -151,14 +185,13 @@ export async function getClientByPhone(phoneRaw = '') {
 
 export async function upsertClientByPhone(record = {}) {
   const sheets = await getSheets();
-  const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('Falta SHEETS_SPREADSHEET_ID');
+  if (!SPREADSHEET_ID) throw new Error('Falta SHEETS_SPREADSHEET_ID');
 
   const telefono = onlyDigits(record.telefono || '');
   if (!telefono) return false;
 
   const r = await sheets.spreadsheets.values.get({
-    spreadsheetId,
+    spreadsheetId: SPREADSHEET_ID,
     range: `${TAB_CLIENTS}!A1:Z10000`
   });
   const rows = r.data.values || [];
@@ -169,7 +202,7 @@ export async function upsertClientByPhone(record = {}) {
 
   if (rows.length === 0) {
     await sheets.spreadsheets.values.update({
-      spreadsheetId,
+      spreadsheetId: SPREADSHEET_ID,
       range: `${TAB_CLIENTS}!A1`,
       valueInputOption: 'RAW',
       requestBody: { values: [headers] }
@@ -220,15 +253,14 @@ export async function upsertClientByPhone(record = {}) {
   if (foundRowIndex >= 0) {
     const rowNumber = foundRowIndex + 1;
     await sheets.spreadsheets.values.update({
-      spreadsheetId,
+      spreadsheetId: SPREADSHEET_ID,
       range: `${TAB_CLIENTS}!A${rowNumber}`,
       valueInputOption: 'RAW',
       requestBody: { values: [rowOut] }
     });
   } else {
-    // APPEND nueva fila
     await sheets.spreadsheets.values.append({
-      spreadsheetId,
+      spreadsheetId: SPREADSHEET_ID,
       range: `${TAB_CLIENTS}!A1`,
       valueInputOption: 'RAW',
       insertDataOption: 'INSERT_ROWS',
@@ -238,40 +270,7 @@ export async function upsertClientByPhone(record = {}) {
   return true;
 }
 
-function buildSummaryBullets(s, fechaDisplay) {
-  const nombre = s?.profileName || s?.fullName || 'Cliente';
-  const dep    = s?.vars?.departamento || 'ND';
-  const zona   = s?.vars?.subzona || 'ND';
-  const cultivo= (s?.vars?.cultivos && s.vars.cultivos[0]) || 'ND';
-  const ha     = s?.vars?.hectareas || 'ND';
-  const camp   = s?.vars?.campana || '';
-  const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
-  const items = (carrito.length > 0) ? carrito : [{
-    nombre: s?.vars?.last_product || '',
-    presentacion: s?.vars?.last_presentacion || '',
-    cantidad: s?.vars?.cantidad || ''
-  }].filter(it => it.nombre);
-
-  const linesProductos = items.map(it => {
-    const pres = it.presentacion ? ` (${it.presentacion})` : '';
-    const cant = it.cantidad ? ` — ${it.cantidad}` : '';
-    return `* ${it.nombre}${pres}${cant}`;
-  });
-
-  const base = [
-    `* Fecha: ${fechaDisplay}`,
-    `* ${nombre}`,
-    `* Departamento: ${dep}`,
-    `* Zona: ${zona}`,
-    `* Cultivo: ${cultivo}`,
-    `* Hectáreas: ${ha}`,
-    `* Campaña: ${camp}`,
-    ...linesProductos
-  ];
-
-  return base.join('\n');
-}
-
+/* ========== UTILIDADES DE MENSAJERÍA / COTIZACIÓN ========== */
 function buildClientMessage({ nombre, items }) {
   const quien = nombre || 'Hola';
   const lines = items.map(it => {
@@ -285,17 +284,14 @@ function buildClientMessage({ nombre, items }) {
     ...lines
   ].join('\n');
 }
-
 function buildWaLinkTo(numberDigits, message) {
   const to = onlyDigits(numberDigits);
   const text = encodeURIComponent(message);
   return to ? `https://wa.me/${to}?text=${text}` : '';
 }
-
 function buildShareLink(message) {
   return `https://wa.me/?text=${encodeURIComponent(message)}`;
 }
-
 function buildGroupShareMessage({ resumen, linkClienteConMensaje }) {
   return [
     `Resumen de solicitud:`,
@@ -305,7 +301,7 @@ function buildGroupShareMessage({ resumen, linkClienteConMensaje }) {
   ].join('\n');
 }
 
-function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
+export function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   const now = new Date();
   const fechaDisplay = formatDisplayDate(now);
 
@@ -320,21 +316,35 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   const carrito = Array.isArray(s?.vars?.cart) ? s.vars.cart : [];
   const items = (carrito.length > 0)
     ? carrito
-    : [{
-        nombre: s?.vars?.last_product || '',
-        presentacion: s?.vars?.last_presentacion || '',
-        cantidad: s?.vars?.cantidad || ''
-      }].filter(it => it.nombre);
+    : [ { nombre: s?.vars?.last_product || '', presentacion: s?.vars?.last_presentacion || '', cantidad: s?.vars?.cantidad || '' } ]
+        .filter(it => it.nombre);
 
   const productoCell     = items.map(it => it?.nombre || '').join('\n');
   const presentacionCell = items.map(it => it?.presentacion || '').join('\n');
   const cantidadCell     = items.map(it => it?.cantidad || '').join('\n');
 
   const cotizacion_id = `${Date.now()}-${String(fromPhone || '').slice(-7)}`;
-  const resumenTxt = buildSummaryBullets(s, fechaDisplay);
+
+  const linesProductos = items.map(it => {
+    const pres = it.presentacion ? ` (${it.presentacion})` : '';
+    const cant = it.cantidad ? ` — ${it.cantidad}` : '';
+    return `* ${it.nombre}${pres}${cant}`;
+  });
+
+  const resumenTxt = [
+    `* Fecha: ${fechaDisplay}`,
+    `* ${fullName || 'Cliente'}`,
+    `* Departamento: ${dep || 'ND'}`,
+    `* Zona: ${zona || 'ND'}`,
+    `* Cultivo: ${cultivo || 'ND'}`,
+    `* Hectáreas: ${hectareas || 'ND'}`,
+    `* Campaña: ${camp || ''}`,
+    ...linesProductos
+  ].join('\n');
+
   const clientMsg   = buildClientMessage({ nombre: fullName, items });
   const linkCliente = buildWaLinkTo(fromPhone, clientMsg);
-  const groupMsg = buildGroupShareMessage({ resumen: resumenTxt, linkClienteConMensaje: linkCliente });
+  const groupMsg    = buildGroupShareMessage({ resumen: resumenTxt, linkClienteConMensaje: linkCliente });
   const resumenPedidoLink = buildShareLink(groupMsg);
 
   const EST = String(estado || '').toUpperCase();
@@ -344,7 +354,7 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
   const phoneDigitsOnly = onlyDigits(fromPhone);
 
   return [
-    fechaDisplay,         // 0 Fecha (legible local)
+    fechaDisplay,         // 0 Fecha
     phoneDigitsOnly,      // 1 Teléfono
     fullName,             // 2 Nombre Completo
     ubicacion,            // 3 Ubicación
@@ -355,8 +365,8 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
     presentacionCell,     // 8 Presentacion
     cantidadCell,         // 9 Cantidad
     estadoFinal,          // 10 Estado
-    linkCliente,          // 11 Contacto Cliente (link con saludo)
-    resumenPedidoLink,    // 12 Resumen Pedido (link para compartir)
+    linkCliente,          // 11 Contacto Cliente
+    resumenPedidoLink,    // 12 Resumen Pedido (link)
     seguimiento,          // 13 Seguimiento
     cotizacion_id,        // 14 cotizacion_id
     calId                 // 15 calendar_event_id
@@ -365,55 +375,22 @@ function buildRowFromSession(s, fromPhone, estado = 'NUEVO') {
 
 export async function appendFromSession(s, fromPhone, estado = 'NUEVO') {
   const sheets = await getSheets();
-  const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-  const tab = process.env.SHEETS_TAB_NAME || 'Hoja 1';
-
-  if (!spreadsheetId) {
-    throw new Error('Falta SHEETS_SPREADSHEET_ID en el entorno.');
-  }
+  if (!SPREADSHEET_ID) throw new Error('Falta SHEETS_SPREADSHEET_ID');
 
   const values = [buildRowFromSession(s, fromPhone, estado)];
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${tab}!A1`,
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${TAB2_DEFAULT}!A1`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
   });
 
-  return values[0][14]; 
+  return values[0][14]; // cotizacion_id
 }
 
-const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3')
-  .split(',').map(n => +n.trim()).filter(Boolean);
-const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9')
-  .split(',').map(n => +n.trim()).filter(Boolean);
-
-function monthNowTZ(){
-  try{
-    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: LOCAL_TZ, month:'2-digit' })
-      .formatToParts(new Date());
-    return +parts.find(p => p.type==='month').value;
-  }catch{
-    return (new Date()).getMonth()+1;
-  }
-}
-function campanaFromNow(){
-  const m = monthNowTZ();
-  return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
-}
-
-const TAB2_DEFAULT = process.env.SHEETS_TAB2_NAME || 'Hoja 2';
-
-function normalizeDateDMY(s=''){
-  const t = String(s).trim();
-  const m = t.match(/^([0-3]?\d)[\/\-]([0-1]?\d)[\/\-](\d{2,4})$/);
-  if (!m) return t;
-  let [_, d, mo, y] = m;
-  if (y.length === 2) y = Number(y) >= 70 ? `19${y}` : `20${y}`;
-  return `${pad2(d)}/${pad2(mo)}/${y}`;
-}
+/* ========== TEXTO → CAMPOS FACTURACIÓN/RECOJO ========== */
 const MONTH_MAP = {
   'enero':1,'ene':1,
   'febrero':2,'feb':2,
@@ -428,25 +405,72 @@ const MONTH_MAP = {
   'noviembre':11,'nov':11,
   'diciembre':12,'dic':12
 };
-
 const WEEKDAY_MAP = {
-  'domingo':0,
-  'lunes':1,
-  'martes':2,
-  'miercoles':3, 'miércoles':3,
-  'jueves':4,
-  'viernes':5,
-  'sabado':6, 'sábado':6
+  'domingo':0,'lunes':1,'martes':2,'miercoles':3,'miércoles':3,'jueves':4,'viernes':5,'sabado':6,'sábado':6
 };
-
-const NORM = (s='') => s.normalize('NFD').replace(/\p{Diacritic}/gu,'').toLowerCase().trim();
+const normName = (s='') => String(s)
+  .normalize('NFD')
+  .replace(/\p{Diacritic}/gu,'')
+  .replace(/[^a-z0-9 ]/gi,'')
+  .trim()
+  .toLowerCase();
+function todayYMD(){
+  try{
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: LOCAL_TZ, year:'numeric', month:'2-digit', day:'2-digit' })
+      .formatToParts(new Date());
+    const get = t => parts.find(p=>p.type===t)?.value || '';
+    return { y: +get('year'), m: +get('month'), d: +get('day') };
+  }catch{
+    const d = new Date();
+    return { y:d.getFullYear(), m:d.getMonth()+1, d:d.getDate() };
+  }
+}
+function dmyFromOffset(days){
+  const { y, m, d } = todayYMD();
+  const base = new Date(Date.UTC(y, m-1, d));
+  const tgt  = new Date(base.getTime() + days*24*60*60*1000);
+  return `${pad2(tgt.getUTCDate())}/${pad2(tgt.getUTCMonth()+1)}/${tgt.getUTCFullYear()}`;
+}
+function nextWeekdayDMY(targetDow, forceNextWeek=false){
+  const { y, m, d } = todayYMD();
+  const base = new Date(Date.UTC(y, m-1, d));
+  const todayDow = base.getUTCDay();
+  let delta = (targetDow - todayDow + 7) % 7;
+  if (delta === 0 && (forceNextWeek || true)) delta = 7;
+  const tgt = new Date(base.getTime() + delta*24*60*60*1000);
+  return `${pad2(tgt.getUTCDate())}/${pad2(tgt.getUTCMonth()+1)}/${tgt.getUTCFullYear()}`;
+}
+function normalizeDateDMY(s=''){
+  const t = String(s).trim();
+  const m = t.match(/^([0-3]?\d)[\/\-]([0-1]?\d)[\/\-](\d{2,4})$/);
+  if (!m) return t;
+  let [_, d, mo, y] = m;
+  if (y.length === 2) y = Number(y) >= 70 ? `19${y}` : `20${y}`;
+  return `${pad2(d)}/${pad2(mo)}/${y}`;
+}
+function dateFromDayMonthWords(text){
+  const t = NORM(text).replace(/-/g,' ');
+  const m = t.match(/\b([0-3]?\d)\s*(?:de\s*)?([a-záéíóúñ]{3,12})\.?(?:\s*de\s*(\d{2,4}))?\b/);
+  if (!m) return '';
+  const d = parseInt(m[1],10);
+  const monName = m[2];
+  const yRaw = m[3];
+  const mo = MONTH_MAP[monName];
+  if (!mo) return '';
+  let y;
+  if (yRaw) {
+    y = String(yRaw).length===2 ? (Number(yRaw)>=70 ? 1900+Number(yRaw) : 2000+Number(yRaw)) : Number(yRaw);
+  } else {
+    const { y:cy, m:cm, d:cd } = todayYMD();
+    y = (mo < cm || (mo===cm && d < cd)) ? cy + 1 : cy;
+  }
+  return `${pad2(d)}/${pad2(mo)}/${y}`;
+}
 function nextDateFromWords(text){
   const t = NORM(text);
-
   if (/\bhoy\b/.test(t)) return dmyFromOffset(0);
   if (/\bmanana\b/.test(t)) return dmyFromOffset(1);
   if (/\bpasado\s+manana\b/.test(t)) return dmyFromOffset(2);
-
   const m = t.match(/\b(este|prox(?:imo)?)?\s*(domingo|lunes|martes|miercoles|jueves|viernes|sabado)\b/);
   if (m){
     const qualifier = m[1] || '';
@@ -458,68 +482,9 @@ function nextDateFromWords(text){
   }
   return '';
 }
-
-function dateFromDayMonthWords(text){
-  const t = NORM(text).replace(/-/g,' ');
-  const m = t.match(/\b([0-3]?\d)\s*(?:de\s*)?([a-záéíóúñ]{3,12})\.?(?:\s*de\s*(\d{2,4}))?\b/);
-  if (!m) return '';
-  const d = parseInt(m[1],10);
-  const monName = m[2];
-  const yRaw = m[3];
-
-  let mo = MONTH_MAP[monName];
-  if (!mo) return '';
-  let y;
-  if (yRaw) {
-    y = String(yRaw).length===2 ? (Number(yRaw)>=70 ? 1900+Number(yRaw) : 2000+Number(yRaw)) : Number(yRaw);
-  } else {
-    const { y:cy, m:cm, d:cd } = todayYMD();
-    y = cy;
-    if (mo < cm || (mo===cm && d < cd)) y = cy + 1;
-  }
-  return `${pad2(d)}/${pad2(mo)}/${y}`;
-}
-
-function todayYMD(){
-  try{
-    const parts = new Intl.DateTimeFormat('en-GB', {
-      timeZone: LOCAL_TZ, year:'numeric', month:'2-digit', day:'2-digit'
-    }).formatToParts(new Date());
-    const get = t => parts.find(p=>p.type===t)?.value || '';
-    return { y: +get('year'), m: +get('month'), d: +get('day') };
-  }catch{
-    const d = new Date();
-    return { y:d.getFullYear(), m:d.getMonth()+1, d:d.getDate() };
-  }
-}
-
-function dmyFromOffset(days){
-  const { y, m, d } = todayYMD();
-  const base = new Date(Date.UTC(y, m-1, d));
-  const tgt  = new Date(base.getTime() + days*24*60*60*1000);
-  return `${pad2(tgt.getUTCDate())}/${pad2(tgt.getUTCMonth()+1)}/${pad2(tgt.getUTCFullYear())}`;
-}
-
-function nextWeekdayDMY(targetDow, forceNextWeek=false){
-  const { y, m, d } = todayYMD();
-  const base = new Date(Date.UTC(y, m-1, d));
-  const todayDow = base.getUTCDay(); // 0..6
-  let delta = (targetDow - todayDow + 7) % 7;
-  if (delta === 0 && (forceNextWeek || true)) delta = 7;
-  const tgt = new Date(base.getTime() + delta*24*60*60*1000);
-  return `${pad2(tgt.getUTCDate())}/${pad2(tgt.getUTCMonth()+1)}/${pad2(tgt.getUTCFullYear())}`;
-}
-
 function normalizePlate(s=''){
   return String(s).toUpperCase().replace(/\s+/g,'').replace(/[^A-Z0-9\-]/g,'');
 }
-
-const normName = (s='') => String(s)
-  .normalize('NFD')
-  .replace(/\p{Diacritic}/gu,'')
-  .replace(/[^a-z0-9 ]/gi,'')
-  .trim()
-  .toLowerCase();
 
 export function parseClientResponse(text = '', fallbackName = '') {
   const out = {
@@ -527,7 +492,7 @@ export function parseClientResponse(text = '', fallbackName = '') {
     razonSocial: '',
     nit: '',
     nombreChofer: '',
-    ciChofer: '', 
+    ciChofer: '',
     placa: '',
     fechaRecojo: ''
   };
@@ -548,7 +513,6 @@ export function parseClientResponse(text = '', fallbackName = '') {
   const reChofer = /(nombre\s+del\s+chofer|chofer|conductor)\s*[:\-]\s*(.+)/i;
   const rePlaca  = /(placa(?:\s+del\s+veh[ií]culo)?|placa)\s*[:\-]\s*([A-Za-z0-9\-\s]{4,})/i;
   const reFecha  = /(fecha(?:\s+de)?\s*(recojo|retiro)?)(?:\s*\([^)]*\))?\s*[:\-]\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i;
-
   const reCI     = /(c\.?\s*i\.?|ci|carnet(?:\s+de)?\s+identidad|cedula|c[eé]dula)(?:\s+(?:del|de)\s+chofer)?\s*[:\-]\s*([A-Za-z0-9.\-\/\s]+)/i;
 
   for (const line of lines) {
@@ -602,13 +566,7 @@ export function parseClientResponse(text = '', fallbackName = '') {
     if (w) out.fechaRecojo = w;
   }
 
-  if (!out.fechaRecojo) {
-    const m1 = String(text).match(/fecha(?:\s+de)?\s*(?:recojo|retiro)?(?:\s*\([^)]*\))?\s*-\s*([0-3]?\d[\/\-][01]?\d[\/\-]\d{2,4})/i);
-    if (m1) out.fechaRecojo = normalizeDateDMY(m1[1]);
-  }
-
   if (!out.ciChofer) {
-    // patrón “CI ... 123456 LP” o “carnet identidad 987654 SC”
     const mCI = String(text).match(/(?:c\.?\s*i\.?|ci|carnet(?:\s+de)?\s+identidad|cedula|c[eé]dula)[^0-9]{0,15}([0-9.\-\/\s]{5,})/i);
     if (mCI) out.ciChofer = onlyDigits(mCI[1]);
   }
@@ -641,33 +599,28 @@ export function parseClientResponse(text = '', fallbackName = '') {
   out.razonSocial   = out.razonSocial.replace(/\s+/g, ' ').trim();
   out.nombreChofer  = out.nombreChofer.replace(/\s+/g, ' ').trim();
   out.nombreCliente = out.nombreCliente.replace(/\s+/g, ' ').trim();
-  out.ciChofer      = onlyDigits(out.ciChofer); 
+  out.ciChofer      = onlyDigits(out.ciChofer);
 
   return out;
 }
 
 export async function appendBillingPickupRow({ nombreCliente, razonSocial, nit, nombreChofer, ciChofer, placa, fechaRecojo }){
   const sheets = await getSheets();
-  const spreadsheetId = process.env.SHEETS_SPREADSHEET_ID;
-  const tab2 = TAB2_DEFAULT;
-
-  if (!spreadsheetId) {
-    throw new Error('Falta SHEETS_SPREADSHEET_ID en el entorno.');
-  }
+  if (!SPREADSHEET_ID) throw new Error('Falta SHEETS_SPREADSHEET_ID');
 
   const values = [[
     nombreCliente || '',
     razonSocial   || '',
     nit           || '',
     nombreChofer  || '',
-    onlyDigits(ciChofer || ''), 
+    onlyDigits(ciChofer || ''),
     placa         || '',
     fechaRecojo   || ''
   ]];
 
   await sheets.spreadsheets.values.append({
-    spreadsheetId,
-    range: `${tab2}!A1`,
+    spreadsheetId: SPREADSHEET_ID,
+    range: `${TAB2_DEFAULT}!A1`,
     valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: { values },
@@ -682,31 +635,13 @@ export async function parseAndAppendClientResponse({ text, clientName }){
   return parsed;
 }
 
-const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
-
-const TAB3_PRECIOS = process.env.SHEETS_TAB3_NAME || 'Hoja 3';
-const TAB4_HIST    = process.env.SHEETS_TAB4_NAME || 'Hoja 4';
-
-const PRECIOS_VERSION_CELL = process.env.SHEETS_PRICES_VERSION_CELL || `${TAB3_PRECIOS}!J1`;
-const PRECIOS_RATE_CELL    = process.env.SHEETS_PRICES_RATE_CELL    || `${TAB3_PRECIOS}!J2`;
-
-const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
-
-// pestañas/hojas (puedes ajustar los defaults)
-const TAB3_PRECIOS_PUBLIC  = process.env.SHEETS_TAB3_NAME          || 'Hoja 3';
-const TAB3_PRECIOS_PRIVATE = process.env.SHEETS_TAB3_PRIVATE_NAME  || 'PRECIOS_NUEVOS';
-
-// celdas meta (versión/tipo de cambio) — una por tier (puedes apuntar a otras si quieres)
+/* ========== PRECIOS (LECTURA/ESCRITURA) ========== */
 function metaCellsFor(tab){
-  return {
-    versionCell: `${tab}!J1`,
-    rateCell:    `${tab}!J2`
-  };
+  return { versionCell: `${tab}!J1`, rateCell: `${tab}!J2` };
 }
 
 export async function readPrices(tier = 'public') {
   const sheets = await getSheets();
-
   const tab = (tier === 'private') ? TAB3_PRECIOS_PRIVATE : TAB3_PRECIOS_PUBLIC;
   const { versionCell, rateCell } = metaCellsFor(tab);
 
@@ -722,7 +657,7 @@ export async function readPrices(tier = 'public') {
     const rRaw = meta.data.valueRanges?.[1]?.values?.[0]?.[0];
     version = Number(vRaw || 1);
     rate = Number(rRaw || 6.96);
-  } catch {}
+  } catch { /* meta opcional */ }
 
   const r = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -741,15 +676,7 @@ export async function readPrices(tier = 'public') {
       const pBs          = Number((row[5] || '').toString().replace(',', '.')) || 0;
       const sku          = presentacion ? `${producto}-${presentacion}` : producto;
 
-      return {
-        categoria: tipo,
-        sku,
-        unidad,
-        precio_usd: pUsd,
-        precio_bs: pBs,
-        nombre: producto,           // útil para /api/catalog
-        presentacion
-      };
+      return { categoria: tipo, sku, unidad, precio_usd: pUsd, precio_bs: pBs, nombre: producto, presentacion };
     });
 
   return { prices, version, rate, tier: (tier === 'private') ? 'private' : 'public' };
@@ -846,6 +773,7 @@ export async function writeRate(rate) {
   return true;
 }
 
+/* ========== HISTORIAL CHAT (Hoja 4) ========== */
 export async function appendMessage({ waId, name, ts, role, content }) {
   const sheets = await getSheets();
   const row = [
@@ -874,7 +802,6 @@ export async function historyForIdLastNDays(waId, days = 7) {
   const rows = r.data.values || [];
 
   const data = rows.slice(1);
-
   return data
     .map(row => ({
       wa_id: row[0],
@@ -883,11 +810,7 @@ export async function historyForIdLastNDays(waId, days = 7) {
       role: row[3],
       content: row[4],
     }))
-    .filter(x =>
-      x.wa_id === String(waId) &&
-      Number.isFinite(x.ts) &&
-      x.ts >= since
-    )
+    .filter(x => x.wa_id === String(waId) && Number.isFinite(x.ts) && x.ts >= since)
     .sort((a, b) => a.ts - b.ts);
 }
 
@@ -979,9 +902,23 @@ export async function pruneExpiredConversations(days = 7) {
 export async function appendChatHistoryRow({ wa_id, nombre, ts_iso, role, content }) {
   return appendMessage({ waId: wa_id, name: nombre, ts: ts_iso, role, content });
 }
-
 export async function purgeOldChatHistory(days = 7) {
   return pruneExpiredConversations(days);
 }
 
-export { getSheets, buildRowFromSession };
+/* ========== CAMPANA UTILITIES (por si las usas) ========== */
+function monthNowTZ(){
+  try{
+    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: LOCAL_TZ, month:'2-digit' })
+      .formatToParts(new Date());
+    return +parts.find(p => p.type==='month').value;
+  }catch{
+    return (new Date()).getMonth()+1;
+  }
+}
+function campanaFromNow(){
+  const m = monthNowTZ();
+  return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
+}
+// (exporta si las necesitas)
+export { campanaFromNow };
