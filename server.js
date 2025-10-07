@@ -51,9 +51,8 @@ app.use(pricesRouter);
 
 app.get('/api/catalog', async (_req, res) => {
   try {
-    const { prices = [], rate = 6.96 } = await readPrices();
-
-    // Agrupar por PRODUCTO (a partir de sku = "PRODUCTO-PRESENTACION")
+    const tier = (req.query.tier === 'private') ? 'private' : 'public';
+    const { prices = [], rate = 6.96 } = await readPrices(tier);
     const byProduct = new Map();
     for (const p of prices) {
       const sku = String(p.sku || '').trim();
