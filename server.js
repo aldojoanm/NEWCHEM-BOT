@@ -272,27 +272,7 @@ app.post('/wa/agent/send-media', auth, upload.array('files'), async (req, res) =
     res.status(500).json({ error: 'no se pudo guardar en Hoja 4' });
   }
 });
-// ==== Campaña automática por mes (configurable por ENV) ====
-const CAMP_VERANO_MONTHS = (process.env.CAMPANA_VERANO_MONTHS || '10,11,12,1,2,3') // Oct–Mar
-  .split(',').map(n => +n.trim()).filter(Boolean);
-const CAMP_INVIERNO_MONTHS = (process.env.CAMPANA_INVIERNO_MONTHS || '4,5,6,7,8,9') // Abr–Sep
-  .split(',').map(n => +n.trim()).filter(Boolean);
 
-function monthInTZ(tz = TZ){
-  try{
-    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: tz, month:'2-digit' })
-      .formatToParts(new Date());
-    return +parts.find(p => p.type === 'month').value;
-  }catch{
-    return (new Date()).getMonth() + 1; // 1..12
-  }
-}
-function currentCampana(){               // ← "Verano" o "Invierno" según mes actual
-  const m = monthInTZ(TZ);
-  return CAMP_VERANO_MONTHS.includes(m) ? 'Verano' : 'Invierno';
-}
-
-// ========= Arranque =========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server escuchando en :${PORT}`);

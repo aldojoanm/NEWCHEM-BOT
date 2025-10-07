@@ -690,8 +690,25 @@ const TAB4_HIST    = process.env.SHEETS_TAB4_NAME || 'Hoja 4';
 const PRECIOS_VERSION_CELL = process.env.SHEETS_PRICES_VERSION_CELL || `${TAB3_PRECIOS}!J1`;
 const PRECIOS_RATE_CELL    = process.env.SHEETS_PRICES_RATE_CELL    || `${TAB3_PRECIOS}!J2`;
 
-export async function readPrices() {
+const SPREADSHEET_ID = process.env.SHEETS_SPREADSHEET_ID;
+
+// pestañas/hojas (puedes ajustar los defaults)
+const TAB3_PRECIOS_PUBLIC  = process.env.SHEETS_TAB3_NAME          || 'Hoja 3';
+const TAB3_PRECIOS_PRIVATE = process.env.SHEETS_TAB3_PRIVATE_NAME  || 'PRECIOS_NUEVOS';
+
+// celdas meta (versión/tipo de cambio) — una por tier (puedes apuntar a otras si quieres)
+function metaCellsFor(tab){
+  return {
+    versionCell: `${tab}!J1`,
+    rateCell:    `${tab}!J2`
+  };
+}
+
+export async function readPrices(tier = 'public') {
   const sheets = await getSheets();
+
+  const tab = (tier === 'private') ? TAB3_PRECIOS_PRIVATE : TAB3_PRECIOS_PUBLIC;
+  const { versionCell, rateCell } = metaCellsFor(tab);
 
   let version = 1;
   let rate = 6.96;
@@ -699,42 +716,43 @@ export async function readPrices() {
   try {
     const meta = await sheets.spreadsheets.values.batchGet({
       spreadsheetId: SPREADSHEET_ID,
-      ranges: [PRECIOS_VERSION_CELL, PRECIOS_RATE_CELL],
+      ranges: [versionCell, rateCell],
     });
     const vRaw = meta.data.valueRanges?.[0]?.values?.[0]?.[0];
     const rRaw = meta.data.valueRanges?.[1]?.values?.[0]?.[0];
     version = Number(vRaw || 1);
     rate = Number(rRaw || 6.96);
-  } catch {
-  }
+  } catch {}
 
   const r = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${TAB3_PRECIOS}!A2:F`,
+    range: `${tab}!A2:F`, // [Tipo, Producto, Presentación, Unidad, USD, Bs]
   });
 
   const rows = r.data.values || [];
   const prices = rows
     .filter(row => (row[0] || row[1] || row[2] || row[3] || row[4] || row[5]))
     .map(row => {
-      const tipo = row[0] || '';
-      const producto = row[1] || '';
+      const tipo         = row[0] || '';
+      const producto     = row[1] || '';
       const presentacion = row[2] || '';
-      const unidad = row[3] || '';
-      const pUsd = Number((row[4] || '').toString().replace(',', '.')) || 0;
-      const pBs  = Number((row[5] || '').toString().replace(',', '.')) || 0;
-      const sku = presentacion ? `${producto}-${presentacion}` : producto;
+      const unidad       = row[3] || '';
+      const pUsd         = Number((row[4] || '').toString().replace(',', '.')) || 0;
+      const pBs          = Number((row[5] || '').toString().replace(',', '.')) || 0;
+      const sku          = presentacion ? `${producto}-${presentacion}` : producto;
 
       return {
         categoria: tipo,
         sku,
         unidad,
         precio_usd: pUsd,
-        precio_bs: pBs
+        precio_bs: pBs,
+        nombre: producto,           // útil para /api/catalog
+        presentacion
       };
     });
 
-  return { prices, version, rate };
+  return { prices, version, rate, tier: (tier === 'private') ? 'private' : 'public' };
 }
 
 export async function writePrices(prices, expectedVersion) {

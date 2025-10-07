@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { buildQuoteFromSession } from './quote-engine.js';
 import { renderQuotePDF } from './quote-pdf.js';
+import { readPrices } from './sheets.js';
 
 // ===== ENV =====
 const WA_TOKEN        = process.env.WHATSAPP_TOKEN || '';
@@ -110,9 +111,12 @@ async function waSendDocument(to, mediaId, filename, caption=''){
  * @param {object} session  Objeto de sesión/estado.
  * @returns {Promise<{ok:boolean, sent:boolean, mediaId:string|null, path:string, filename:string, caption:string, quoteId?:string}>}
  */
-export async function sendAutoQuotePDF(to, session){
+
+export async function sendAutoQuotePDF(to, session, opts = {}) {
   await _acquire();
   try{
+    const tier = opts?.tier || session?.vars?.priceTier || 'public';
+    const { prices, rate } = await readPrices(tier);
     const quote = await buildQuoteFromSession(session);
 
     const cleanName = (s='') =>
