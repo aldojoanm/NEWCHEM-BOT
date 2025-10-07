@@ -823,41 +823,24 @@ function toNumberFlexible(x=''){
   return Number(s);
 }
 
-// === router: reemplazar esta función ===
 function parseCartFromText(text=''){
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-  // Encabezados válidos
-  const first = (lines[0] || '');
-  const headerOK = /^(PEDIDO NEW CHEM|CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(first);
+  // Encabezados válidos (nuevo + legacy)
+  const headerOK = /^(PEDIDO NEW CHEM|CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(lines[0] || '');
   if (!headerOK) return null;
-
-  // Detecta "PRIVADO" en el encabezado (para listas privadas)
-  const tier = /\bPRIVADO\b/i.test(first) ? 'private' : 'public';
 
   const items = [];
   let totalUsd = null, totalBs = null;
 
+  // Ítems:
+  // "* NOMBRE (PRES) — 10 L — SUBTOTAL: US$ 100.00 · Bs 696.00"
+  // También acepta el legacy: "... — SUBTOTAL: $100.00"
   const reItem = /^\*\s*(.+?)(?:\s*\((.+?)\))?\s*—\s*([\d.,]+)\s*(l|lt|lts|litros?|kg|kilos?|unid|unidad(?:es)?)?(?:\s*—\s*SUBTOTAL\s*:\s*(?:U?S?\$?\s*([\d.,]+))(?:\s*[·,]\s*Bs\s*([\d.,]+))?)?$/i;
+
+  // Totales (con o sin guion bajo, con o sin ":")
   const reTotUsd = /^TOTAL[_\s]?USD\s*:?\s*([\d.,]+)/i;
   const reTotBs  = /^TOTAL[_\s]?BS\s*:?\s*([\d.,]+)/i;
-
-  const toNumberFlexible = (x='')=>{
-    const s = String(x).trim();
-    const hasDot = s.includes('.');
-    const hasComma = s.includes(',');
-    if (hasDot && hasComma){
-      const lastDot = s.lastIndexOf('.');
-      const lastComma = s.lastIndexOf(',');
-      if (lastComma > lastDot) return Number(s.replace(/\./g,'').replace(',','.'));
-      return Number(s.replace(/,/g,''));
-    } else if (hasComma){
-      return /,\d{1,2}$/.test(s) ? Number(s.replace(',','.')) : Number(s.replace(/,/g,''));
-    } else if (hasDot){
-      return /\.\d{1,2}$/.test(s) ? Number(s) : Number(s.replace(/\./g,''));
-    }
-    return Number(s);
-  };
 
   for (const l of lines.slice(1)){
     const mUsd = l.match(reTotUsd);
@@ -890,9 +873,8 @@ function parseCartFromText(text=''){
     }
   }
 
-  return items.length ? { items, totalUsd, totalBs, tier } : null;
+  return items.length ? { items, totalUsd, totalBs } : null;
 }
-
 
 function summaryText(s){
   const nombre = s.profileName || 'Cliente';
@@ -1118,7 +1100,6 @@ router.post('/wa/webhook', async (req,res)=>{
     if (parsedCart && !isAdvisor(fromId)) {
       const s0 = S(fromId);
       s0.vars.cart = parsedCart.items || [];
-      s0.vars.priceTier = parsedCart.tier || 'public';
       s0.pending = null;
       s0.lastPrompt = null;
       s0.stage = 'checkout';
