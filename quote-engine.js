@@ -2,6 +2,7 @@
 import { getPrices } from './prices.js';
 import fs from 'fs';
 import path from 'path';
+import { readPricesPersonal } from './sheets.js'; 
 
 const CATALOG = readJSON('./knowledge/catalog.json');
 function readJSON(p) {
@@ -133,8 +134,10 @@ function resolvePriceUSD(idx, { sku, nombre, presentacion }, rate){
 
 /* ====== Público ====== */
 export async function buildQuoteFromSession(s, opts={}) {
-  // Trae precios y TC desde Sheets (Hoja 3) usando prices.js
-  const { prices: sheetList = [], rate } = await getPrices({});
+  const usePersonal = !!opts.usePersonal;
+    const { prices: sheetList = [], rate } = usePersonal
+    ? await readPricesPersonal()      // ← precios de PRECIOS_PERSONAL
+    : await getPrices({}); 
 
   const idx  = buildPriceIndex(sheetList);
   const now  = new Date();

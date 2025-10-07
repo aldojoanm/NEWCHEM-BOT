@@ -148,7 +148,8 @@ async function advStart(fromId, parsedCart){
       departamento:null, subzona:null,
       cultivos:[], hectareas:null,
       campana: currentCampana(),
-      cart: parsedCart.items || []
+      cart: parsedCart.items || [],
+      priceSource: parsedCart.personal ? 'personal' : 'public'  // ← NUEVO
     },
     profileName: null,
     meta: {}
@@ -172,10 +173,11 @@ async function advFinalize(fromId){
 
   // Genera PDF con los datos efímeros (no guarda sesión)
   let pdfInfo = null;
-  try { pdfInfo = await sendAutoQuotePDF(null, s); }
-  catch(e){ console.error('[ADV] PDF error', e); }
+ try {
+    const usePersonal = s?.vars?.priceSource === 'personal'; // ← NUEVO
+    pdfInfo = await sendAutoQuotePDF(null, s, { usePersonal }); // ← CAMBIO
+  } catch(e){ console.error('[ADV] PDF error', e); }
 
-  // (Opcional) registra en Sheets como "asesor"
   try {
     const cotId = await appendFromSession(s, tmpId, 'asesor');
     s.vars.cotizacion_id = cotId;
@@ -825,28 +827,33 @@ function toNumberFlexible(x=''){
 
 function parseCartFromText(text=''){
   const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return null;
 
-  // Encabezados válidos (nuevo + legacy)
-  const headerOK = /^(PEDIDO NEW CHEM|CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(lines[0] || '');
+  const first = lines[0] || '';
+  const isPersonal = /^CATALOGO\s+PERSONAL\b/i.test(first) || /CATALOGO PERSONAL - NEW CHEM AGROQUIMICOS/i.test(first);
+
+  const headerOK = isPersonal || /^(PEDIDO NEW CHEM|CART_V1 NEWCHEM|CARRITO NEW CHEM)/i.test(first);
   if (!headerOK) return null;
 
   const items = [];
   let totalUsd = null, totalBs = null;
 
-  // Ítems:
-  // "* NOMBRE (PRES) — 10 L — SUBTOTAL: US$ 100.00 · Bs 696.00"
-  // También acepta el legacy: "... — SUBTOTAL: $100.00"
   const reItem = /^\*\s*(.+?)(?:\s*\((.+?)\))?\s*—\s*([\d.,]+)\s*(l|lt|lts|litros?|kg|kilos?|unid|unidad(?:es)?)?(?:\s*—\s*SUBTOTAL\s*:\s*(?:U?S?\$?\s*([\d.,]+))(?:\s*[·,]\s*Bs\s*([\d.,]+))?)?$/i;
-
-  // Totales (con o sin guion bajo, con o sin ":")
   const reTotUsd = /^TOTAL[_\s]?USD\s*:?\s*([\d.,]+)/i;
   const reTotBs  = /^TOTAL[_\s]?BS\s*:?\s*([\d.,]+)/i;
 
+  const toNumberFlexible = (s='')=>{
+    const t = String(s).trim();
+    const hasDot = t.includes('.'), hasComma=t.includes(',');
+    if (hasDot && hasComma) return Number(t.replace(/\./g,'').replace(',','.'));
+    if (hasComma) return /,\d{1,2}$/.test(t) ? Number(t.replace(',','.')) : Number(t.replace(/,/g,''));
+    if (hasDot) return /\.\d{1,2}$/.test(t) ? Number(t) : Number(t.replace(/\./g,''));
+    return Number(t);
+  };
+
   for (const l of lines.slice(1)){
-    const mUsd = l.match(reTotUsd);
-    const mBs  = l.match(reTotBs);
-    if (mUsd) { totalUsd = toNumberFlexible(mUsd[1]); continue; }
-    if (mBs)  { totalBs  = toNumberFlexible(mBs[1]);  continue; }
+    const mUsd = l.match(reTotUsd); if (mUsd) { totalUsd = toNumberFlexible(mUsd[1]); continue; }
+    const mBs  = l.match(reTotBs);  if (mBs)  { totalBs  = toNumberFlexible(mBs[1]);  continue; }
 
     const m = l.match(reItem);
     if (m){
@@ -873,7 +880,7 @@ function parseCartFromText(text=''){
     }
   }
 
-  return items.length ? { items, totalUsd, totalBs } : null;
+  return items.length ? { items, totalUsd, totalBs, personal: isPersonal } : null;
 }
 
 function summaryText(s){

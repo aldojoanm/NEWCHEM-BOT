@@ -113,8 +113,7 @@ async function waSendDocument(to, mediaId, filename, caption=''){
 export async function sendAutoQuotePDF(to, session){
   await _acquire();
   try{
-    const quote = await buildQuoteFromSession(session);
-
+    const quote = await buildQuoteFromSession(session, opts);
     const cleanName = (s='') =>
       String(s)
         .normalize('NFD').replace(/\p{Diacritic}/gu,'')
